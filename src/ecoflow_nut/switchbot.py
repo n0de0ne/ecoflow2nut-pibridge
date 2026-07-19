@@ -45,9 +45,7 @@ class SwitchBotError(RuntimeError):
 def _looks_like_switchbot(adv: Any) -> bool:
     if _COMPANY_ID in (adv.manufacturer_data or {}):
         return True
-    return any(
-        str(u).lower() == _SERVICE_DATA_UUID for u in (adv.service_data or {})
-    )
+    return any(str(u).lower() == _SERVICE_DATA_UUID for u in (adv.service_data or {}))
 
 
 async def scan(adapter: str, timeout: int = 10) -> list[dict[str, Any]]:

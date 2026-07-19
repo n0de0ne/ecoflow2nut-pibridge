@@ -114,9 +114,7 @@ def _build_controller(adapter: str) -> Any:
     return Controller(bleak_scanner_instance=_make_scanner(adapter))
 
 
-async def _scan_for_device(
-    adapter: str, device_id: str, timeout: int
-) -> tuple[Any, Any]:
+async def _scan_for_device(adapter: str, device_id: str, timeout: int) -> tuple[Any, Any]:
     """Find a specific HomeKit accessory with a plain bleak scan.
 
     Returns ``(BLEDevice, AdvertisementData)`` for the accessory whose HomeKit
@@ -203,9 +201,7 @@ class EveOutlet:
     def _pairing_store(self) -> dict[str, Any]:
         path = Path(self._config.pairing_file)
         if not path.exists():
-            raise EveError(
-                f"no pairing data at {path}; run 'ecoflow-nut eve pair' first"
-            )
+            raise EveError(f"no pairing data at {path}; run 'ecoflow-nut eve pair' first")
         try:
             data = json.loads(path.read_text())
         except (OSError, ValueError) as exc:
@@ -216,13 +212,14 @@ class EveOutlet:
 
     def _select_pairing(self, store: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         """Pick the configured accessory from the persisted pairing store."""
-        alias = _norm_id(self._config.device_id) if self._config.device_id else next(
-            iter(store)
+        alias = (
+            _norm_id(self._config.device_id)
+            if self._config.device_id
+            else next(iter(store))
         )
         if alias not in store:
             raise EveError(
-                f"device_id '{alias}' not found in pairing data; "
-                f"have {sorted(store)}"
+                f"device_id '{alias}' not found in pairing data; " f"have {sorted(store)}"
             )
         return alias, store[alias]
 

@@ -138,9 +138,7 @@ def _outlet_accessories() -> list[dict]:
 def paired(tmp_path: Path) -> EveOutletConfig:
     pairing_file = tmp_path / "eve.json"
     pairing_file.write_text(json.dumps({"dev1": {"AccessoryAddress": "x"}}))
-    return EveOutletConfig(
-        enabled=True, device_id="dev1", pairing_file=str(pairing_file)
-    )
+    return EveOutletConfig(enabled=True, device_id="dev1", pairing_file=str(pairing_file))
 
 
 def test_set_writes_on_characteristic(monkeypatch, paired: EveOutletConfig) -> None:
