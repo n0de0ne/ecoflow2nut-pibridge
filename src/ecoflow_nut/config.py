@@ -96,6 +96,10 @@ class AutoShutdownConfig:
     cut_ac: bool = True
     cut_usb: bool = False  # never default true: a Pi may be powered from USB
     cut_dc: bool = False
+    # Also cut a downstream HomeKit-over-BLE outlet (see EveOutletConfig). Lets a
+    # single load (e.g. an Unraid server) be shed independently of the DELTA 3's
+    # all-or-nothing AC bank, keeping other AC sockets (router/fibre) powered.
+    cut_eve: bool = False
     restore_on_recovery: bool = False
 
 
@@ -117,6 +121,57 @@ class WebConfig:
     auth_token: str = ""
     # Also require the token to view the dashboard / read telemetry.
     require_auth_for_read: bool = False
+
+
+@dataclass(slots=True)
+class EveOutletConfig:
+    """Drive a HomeKit-over-BLE smart outlet (e.g. an Eve Energy, BLE/non-Thread).
+
+    Lets the bridge cut a *single* downstream load (e.g. an Unraid server)
+    independently of the DELTA 3's all-or-nothing AC bank, so the other AC
+    sockets (a router / fibre ONT) stay powered. Disabled by default.
+
+    The bridge becomes the accessory's sole HomeKit controller: reset the outlet
+    and remove it from Apple Home first, then pair it once with
+    ``ecoflow-nut eve pair``. Pairing data is persisted to ``pairing_file`` and
+    survives restarts; ``setup_code`` is only needed during pairing.
+
+    Strongly prefer a SEPARATE Bluetooth adapter from the DELTA 3 link (default
+    ``hci1``): the EcoFlow session is persistent and latency-sensitive, so
+    sharing one radio can stall telemetry. Connections are made on demand
+    (connect -> write -> disconnect) to minimise contention if you must share.
+    """
+
+    enabled: bool = False
+    # HomeKit accessory id (shown by 'eve discover'; saved at pairing time).
+    device_id: str = ""
+    # Bluetooth adapter for the HomeKit link -- ideally a second dongle.
+    adapter: str = "hci1"
+    # Where aiohomekit pairing data is persisted (JSON, {device_id: data}).
+    pairing_file: str = "/var/lib/ecoflow-nut/eve-pairing.json"
+    # 8-digit HomeKit setup code, e.g. "123-45-678". Only needed to pair; may be
+    # left empty once the outlet is paired.
+    setup_code: str = ""
+    connect_timeout_seconds: int = 30
+
+
+@dataclass(slots=True)
+class SwitchBotConfig:
+    """Manual control of a SwitchBot Bot (mechanical button pusher) over BLE.
+
+    A convenience to physically press the server's power button from the CLI or
+    web dashboard -- e.g. to boot a machine that doesn't auto-power-on. Plain BLE
+    GATT, no pairing. Disabled by default; it is *not* wired into auto-shutdown
+    (a power button is a toggle, so an automated press could shut down a server
+    that has already auto-booted). Password-protected Bots are not supported.
+    """
+
+    enabled: bool = False
+    # BLE MAC of the Bot (find it with 'ecoflow-nut switchbot scan').
+    mac: str = ""
+    # Bluetooth adapter (shares the DELTA 3 radio by default; on-demand connect).
+    adapter: str = "hci0"
+    connect_timeout_seconds: int = 20
 
 
 @dataclass(slots=True)
@@ -181,6 +236,8 @@ class Config:
     nut: NutConfig = field(default_factory=NutConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     auto_shutdown: AutoShutdownConfig = field(default_factory=AutoShutdownConfig)
+    eve: EveOutletConfig = field(default_factory=EveOutletConfig)
+    switchbot: SwitchBotConfig = field(default_factory=SwitchBotConfig)
     web: WebConfig = field(default_factory=WebConfig)
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
     sqlite: SqliteConfig = field(default_factory=SqliteConfig)
@@ -225,6 +282,8 @@ def load_config(path: str | Path) -> Config:
     auto_shutdown = AutoShutdownConfig(
         **_filter(AutoShutdownConfig, raw.get("auto_shutdown", {}))
     )
+    eve = EveOutletConfig(**_filter(EveOutletConfig, raw.get("eve", {})))
+    switchbot = SwitchBotConfig(**_filter(SwitchBotConfig, raw.get("switchbot", {})))
 
     web = WebConfig(**_filter(WebConfig, raw.get("web", {})))
     # Secrets may be supplied via the environment instead of the YAML file.
@@ -242,6 +301,8 @@ def load_config(path: str | Path) -> Config:
         nut=nut,
         logging=logging_cfg,
         auto_shutdown=auto_shutdown,
+        eve=eve,
+        switchbot=switchbot,
         web=web,
         postgres=postgres,
         sqlite=sqlite,

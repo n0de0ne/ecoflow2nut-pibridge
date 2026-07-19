@@ -17,8 +17,10 @@ from .autoshutdown import AutoShutdownController, ShutdownAction
 from .ble_client import EcoFlowBLE
 from .config import Config, load_config
 from .delta3 import DeviceState
+from .eve_outlet import EveOutlet
 from .nut_writer import NutWriter
 from .settings_store import SettingsStore
+from .switchbot import SwitchBot
 
 log = structlog.get_logger(__name__)
 
@@ -89,6 +91,19 @@ class Daemon:
         self._last_write_monotonic = time.monotonic()
         self._autoshutdown = AutoShutdownController(config.auto_shutdown)
         self._active_client: EcoFlowBLE | None = None
+        # Optional downstream HomeKit-over-BLE outlet (independent cut target).
+        self._eve: EveOutlet | None = (
+            EveOutlet(config.eve) if config.eve.enabled else None
+        )
+        # Last on/off state we commanded the Eve outlet into (the outlet is not
+        # polled to avoid extra BLE traffic; None == unknown until first command).
+        self._eve_state: bool | None = None
+        # Optional SwitchBot Bot (manual server power-button presser).
+        self._switchbot: SwitchBot | None = (
+            SwitchBot(config.switchbot) if config.switchbot.enabled else None
+        )
+        # One-shot startup reconciliation of the auto-shutdown cut state.
+        self._reconciled = False
         # Latest published telemetry, surfaced to the optional web UI / DB logger.
         self._latest_state: DeviceState | None = None
         self._latest_status: str = "OB"
@@ -207,6 +222,10 @@ class Daemon:
                 update_settings=self._update_settings,
                 energy=self._web_energy,
                 history_enabled=self._store is not None,
+                eve_control=self.control_eve if self._eve is not None else None,
+                switchbot_press=(
+                    self.control_switchbot if self._switchbot is not None else None
+                ),
             )
             await web.start()
             self._web = web
@@ -230,9 +249,21 @@ class Daemon:
             if self._latest_update_monotonic
             else None
         )
+        eve = (
+            {"eve_enabled": True, "eve_on": self._eve_state}
+            if self._eve is not None
+            else {}
+        )
+        if self._switchbot is not None:
+            eve = {**eve, "switchbot_enabled": True}
         if s is None:
-            return {"status": self._latest_status, "updated_seconds_ago": age}
+            return {
+                "status": self._latest_status,
+                "updated_seconds_ago": age,
+                **eve,
+            }
         return {
+            **eve,
             "soc_percent": s.soc_percent,
             "ac_input_watts": s.ac_input_watts,
             "ac_output_watts": s.ac_output_watts,
@@ -313,6 +344,23 @@ class Daemon:
         await client.send_command_packet(OUTPUT_BUILDERS[kind](enabled))
         log.info("control.command", output=kind, enabled=enabled)
         return f"{kind} {'on' if enabled else 'off'}"
+
+    async def control_eve(self, enabled: bool) -> str:
+        """Toggle the downstream HomeKit outlet. Raises on failure."""
+        if self._eve is None:
+            raise RuntimeError("eve outlet is not enabled")
+        await self._eve.set(enabled)
+        self._eve_state = enabled
+        log.info("control.eve", enabled=enabled)
+        return f"eve {'on' if enabled else 'off'}"
+
+    async def control_switchbot(self, action: str = "press") -> str:
+        """Send a one-shot command to the SwitchBot Bot. Raises on failure."""
+        if self._switchbot is None:
+            raise RuntimeError("switchbot is not enabled")
+        message = await self._switchbot.send(action)
+        log.info("control.switchbot", action=action)
+        return message
 
     def _record_sample(self, state: DeviceState, status: str, runtime: int) -> None:
         """Fire-and-forget a Postgres write (errors are swallowed in the store)."""
@@ -405,6 +453,8 @@ class Daemon:
         )
 
         on_battery = status != "OL"
+        if not self._reconciled:
+            self._reconcile_shutdown_state(state.soc_percent, on_battery)
         action = self._autoshutdown.evaluate(
             time.monotonic(),
             state.soc_percent,
@@ -413,6 +463,35 @@ class Daemon:
         )
         if action is not ShutdownAction.NONE:
             self._handle_shutdown_action(action)
+
+    def _reconcile_shutdown_state(self, soc: float | None, on_battery: bool) -> None:
+        """One-shot startup check for a deep-discharge reboot.
+
+        Auto-shutdown state lives in memory, so a full battery drain that
+        power-cycles the host loses the fact that we had cut output. If we boot
+        on line power but still below ``recover_soc_percent``, assume we are
+        recovering from such a drain: hold the cut outputs off until SoC climbs
+        back to the recover level (so protected gear isn't re-powered without a
+        battery buffer to shut down again).
+        """
+        self._reconciled = True
+        cfg = self._config.auto_shutdown
+        if (
+            cfg.enabled
+            and cfg.restore_on_recovery
+            and self._cut_outputs()
+            and not on_battery
+            and soc is not None
+            and soc < cfg.recover_soc_percent
+        ):
+            log.warning(
+                "auto_shutdown.hold_until_recovery",
+                soc=soc,
+                recover_soc=cfg.recover_soc_percent,
+                outputs=self._cut_outputs(),
+            )
+            self._autoshutdown.force_triggered()
+            self._send_outputs(enabled=False)
 
     def _handle_shutdown_action(self, action: ShutdownAction) -> None:
         cfg = self._config.auto_shutdown
@@ -440,14 +519,13 @@ class Daemon:
             names.append("usb")
         if cfg.cut_dc:
             names.append("dc")
+        if cfg.cut_eve and self._eve is not None:
+            names.append("eve")
         return names
 
     def _send_outputs(self, enabled: bool) -> None:
         cfg = self._config.auto_shutdown
         client = self._active_client
-        if client is None:
-            log.error("auto_shutdown.no_client", note="cannot send output command")
-            return
         packets = []
         if cfg.cut_ac:
             packets.append(delta3.set_ac_enabled_packet(enabled))
@@ -455,14 +533,24 @@ class Daemon:
             packets.append(delta3.set_usb_enabled_packet(enabled))
         if cfg.cut_dc:
             packets.append(delta3.set_dc_enabled_packet(enabled))
+        if packets and client is None:
+            log.error("auto_shutdown.no_client", note="cannot send EcoFlow command")
 
         async def _send() -> None:
-            for packet in packets:
+            if client is not None:
+                for packet in packets:
+                    try:
+                        await client.send_command_packet(packet)
+                    except Exception as exc:  # noqa: BLE001
+                        log.error("auto_shutdown.send_failed", error=str(exc))
+                    await asyncio.sleep(0.3)
+            # The HomeKit outlet is an independent cut target on its own radio,
+            # so drive it regardless of the EcoFlow link state.
+            if cfg.cut_eve and self._eve is not None:
                 try:
-                    await client.send_command_packet(packet)
+                    await self.control_eve(enabled)
                 except Exception as exc:  # noqa: BLE001
-                    log.error("auto_shutdown.send_failed", error=str(exc))
-                await asyncio.sleep(0.3)
+                    log.error("auto_shutdown.eve_failed", error=str(exc))
 
         asyncio.create_task(_send())
 

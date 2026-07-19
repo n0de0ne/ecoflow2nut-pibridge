@@ -15,8 +15,11 @@ act while on battery:
   ``load_grace_seconds`` (a "protected gear has powered off" signal), at any
   SoC. A momentary load above the threshold resets its debounce.
 
-Recovery -- AC returns -- resets everything; if a cut had happened and
-``restore_on_recovery`` is set, it emits ``RESTORE`` to turn output back on.
+Recovery -- AC returns -- clears both arm timers. If a cut had happened and
+``restore_on_recovery`` is set, ``RESTORE`` is emitted to turn output back on,
+but only once SoC has climbed back to ``recover_soc_percent`` -- so protected
+gear is not re-powered until the battery again holds enough charge to shut it
+down cleanly if mains drops again. Until then the cut is held.
 """
 
 from __future__ import annotations
@@ -79,9 +82,10 @@ class AutoShutdownController:
         if not self._config.enabled:
             return ShutdownAction.NONE
 
-        # On line power: global recovery (resets both triggers).
+        # On line power: arms are battery-only; restore a prior cut only once
+        # SoC has recovered (see _on_line_power).
         if not on_battery:
-            return self._reset()
+            return self._on_line_power(soc)
 
         if self._triggered:
             return ShutdownAction.NONE
@@ -133,14 +137,43 @@ class AutoShutdownController:
             return ShutdownAction.DISARMED
         return ShutdownAction.NONE
 
-    def _reset(self) -> ShutdownAction:
-        was_triggered = self._triggered
-        was_active = was_triggered or self.armed
+    def _on_line_power(self, soc: float | None) -> ShutdownAction:
+        """Handle an observation taken while on line power (mains/charging).
+
+        The arm timers are battery-only, so they always clear here. A latched
+        cut is restored only once SoC has climbed back to ``recover_soc_percent``
+        -- so protected gear is not powered up again until the battery holds
+        enough charge to shut it down cleanly should mains drop again. Until
+        then the cut is held (no action).
+        """
+        was_armed = self.armed
         self._soc_armed_at = None
         self._load_armed_at = None
-        self._triggered = False
-        if was_triggered and self._config.restore_on_recovery:
-            return ShutdownAction.RESTORE
-        if was_active:
+
+        if self._triggered:
+            if not self._config.restore_on_recovery:
+                self._triggered = False
+                return ShutdownAction.DISARMED
+            if soc is None or soc >= self._config.recover_soc_percent:
+                self._triggered = False
+                return ShutdownAction.RESTORE
+            # Mains is back but the battery has not recovered enough yet: keep
+            # the cut in place and wait for it to charge.
+            return ShutdownAction.NONE
+
+        if was_armed:
             return ShutdownAction.DISARMED
         return ShutdownAction.NONE
+
+    def force_triggered(self) -> None:
+        """Mark a cut as already in effect.
+
+        Used at daemon startup when we boot on line power but below the recover
+        threshold -- almost certainly recovering from a deep discharge that
+        power-cycled the host. Treating it as a latched cut makes the restore
+        gate hold protected gear off until SoC climbs back to
+        ``recover_soc_percent``.
+        """
+        self._soc_armed_at = None
+        self._load_armed_at = None
+        self._triggered = True

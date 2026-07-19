@@ -114,7 +114,10 @@ settings_file: "/var/lib/ecoflow-nut/settings.json"
 auto_shutdown:
   enabled: false
   trigger_soc_percent: 10        # arm + cut at/below this SoC (on battery only)
-  recover_soc_percent: 15        # disarm once SoC climbs back to this (or AC returns)
+  recover_soc_percent: 15        # "recovered" SoC: disarms the SoC trigger, and
+                                 # gates RESTORE -- after a cut, output is turned
+                                 # back on only once SoC climbs back to this (so
+                                 # there's buffer to shut down again), even on AC.
   grace_period_seconds: 300      # wait this long after arming before cutting
   # Low-load trigger: when on battery and AC output stays at/below this many
   # watts for load_grace_seconds, cut AC (the protected gear has powered off).
@@ -124,4 +127,36 @@ auto_shutdown:
   cut_ac: true                   # turn off AC output
   cut_usb: false                 # KEEP false if the bridge host is USB-powered
   cut_dc: false                  # turn off 12V DC output
+  cut_eve: false                 # also cut the downstream HomeKit outlet (see 'eve')
   restore_on_recovery: false     # turn outputs back on when power/SoC recovers
+
+# Optional downstream HomeKit-over-BLE outlet (e.g. an Eve Energy, BLE/non-Thread).
+# DISABLED by default. Lets a SINGLE load (e.g. an Unraid server) be shed on
+# critical battery while the DELTA 3's other AC sockets (router / fibre ONT) stay
+# powered -- the EcoFlow AC toggle is all-or-nothing, this gives per-load control.
+# Requires the [eve] extra:  pip install ecoflow-nut-bridge[eve]
+#
+# One-time setup (the bridge becomes the outlet's sole HomeKit controller):
+#   1. Reset the outlet and remove it from Apple Home (HAP pairs to ONE controller).
+#   2. ecoflow-nut eve discover         # find its device_id
+#   3. set device_id + setup_code below, then: ecoflow-nut eve pair
+#   4. set cut_eve: true above (and usually cut_ac: false to keep the bank live).
+eve:
+  enabled: false
+  device_id: ""                 # HomeKit accessory id (from 'eve discover')
+  # Prefer a SEPARATE BT dongle from the DELTA 3 link to avoid stalling telemetry.
+  adapter: "hci1"
+  pairing_file: "/var/lib/ecoflow-nut/eve-pairing.json"
+  setup_code: ""                # 8-digit HomeKit code, e.g. "123-45-678" (pairing only)
+  connect_timeout_seconds: 30
+
+# Optional SwitchBot Bot (mechanical button pusher) for the server's power button.
+# DISABLED by default. Plain BLE, no pairing. MANUAL ONLY -- exposed on the CLI
+# ('ecoflow-nut switchbot press') and the web dashboard; it is NOT tied to
+# auto-shutdown (a power button is a toggle, so an automated press could shut down
+# a server that already auto-booted). Find the MAC with 'switchbot scan'.
+switchbot:
+  enabled: false
+  mac: ""                       # BLE MAC of the Bot (from 'switchbot scan')
+  adapter: "hci0"               # on-demand connect; brief blip on a shared radio
+  connect_timeout_seconds: 20

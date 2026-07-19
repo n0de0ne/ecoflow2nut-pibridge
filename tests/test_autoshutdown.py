@@ -75,11 +75,38 @@ def test_recovery_by_soc_climb():
     assert c.evaluate(60, 16, on_battery=True) is ShutdownAction.DISARMED
 
 
-def test_restore_on_recovery_when_triggered():
+def test_restore_when_soc_already_recovered():
     c = AutoShutdownController(_cfg(grace_period_seconds=0, restore_on_recovery=True))
     assert c.evaluate(0, 9, on_battery=True) is ShutdownAction.CUT
-    # Mains returns after a cut -> emit RESTORE.
-    assert c.evaluate(10, 9, on_battery=False) is ShutdownAction.RESTORE
+    # Mains returns and SoC is already above recover -> restore immediately.
+    assert c.evaluate(10, 60, on_battery=False) is ShutdownAction.RESTORE
+
+
+def test_restore_waits_for_recover_soc():
+    c = AutoShutdownController(
+        _cfg(grace_period_seconds=0, recover_soc_percent=15, restore_on_recovery=True)
+    )
+    assert c.evaluate(0, 9, on_battery=True) is ShutdownAction.CUT
+    # Mains back but SoC still below recover -> hold the cut, do not restore.
+    assert c.evaluate(10, 9, on_battery=False) is ShutdownAction.NONE
+    assert c.triggered is True
+    assert c.evaluate(20, 14, on_battery=False) is ShutdownAction.NONE
+    # SoC reaches the recover threshold while charging -> restore now.
+    assert c.evaluate(30, 15, on_battery=False) is ShutdownAction.RESTORE
+    assert c.triggered is False
+
+
+def test_force_triggered_holds_until_recover():
+    c = AutoShutdownController(
+        _cfg(grace_period_seconds=0, recover_soc_percent=10, restore_on_recovery=True)
+    )
+    # Simulate a reboot mid-discharge: pretend a cut is already in effect.
+    c.force_triggered()
+    assert c.triggered is True
+    # On line power but below recover -> stay cut.
+    assert c.evaluate(0, 4, on_battery=False) is ShutdownAction.NONE
+    # Charged back to recover -> restore.
+    assert c.evaluate(10, 10, on_battery=False) is ShutdownAction.RESTORE
 
 
 def test_no_restore_when_disabled():
