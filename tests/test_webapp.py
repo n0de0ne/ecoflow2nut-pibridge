@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from ecoflow_nut import webapp
 from ecoflow_nut.config import WebConfig
 from ecoflow_nut.webapp import WebServer
 
@@ -107,6 +110,66 @@ async def test_index_served(secured: TestClient) -> None:
     # Visual port + auto-shutdown status indicators are present.
     for marker in ('id="stAc"', 'id="stUsb"', 'id="stDc"', 'id="asLed"'):
         assert marker in body
+    # The shell pulls in its stylesheet and script.
+    assert "app.css" in body and "app.js" in body
+
+
+@pytest.mark.parametrize("name", sorted(webapp._STATIC_ASSETS))
+async def test_static_asset_served(secured: TestClient, name: str) -> None:
+    resp = await secured.get(f"/static/{name}")
+    assert resp.status == 200
+    assert resp.headers["Content-Type"].startswith(webapp._STATIC_ASSETS[name])
+    assert resp.headers["ETag"]
+    assert await resp.read()
+
+
+async def test_static_asset_conditional_get(secured: TestClient) -> None:
+    first = await secured.get("/static/app.css")
+    etag = first.headers["ETag"]
+    again = await secured.get("/static/app.css", headers={"If-None-Match": etag})
+    assert again.status == 304
+
+
+async def test_static_unknown_asset_404(secured: TestClient) -> None:
+    assert (await secured.get("/static/nope.js")).status == 404
+
+
+async def test_static_rejects_nested_paths(secured: TestClient) -> None:
+    # The route matches a single path segment and the handler is an allowlist
+    # lookup, so neither nesting nor traversal can reach the filesystem.
+    assert (await secured.get("/static/sub/app.js")).status == 404
+    assert (await secured.get("/static/../webapp.py")).status == 404
+
+
+async def test_shell_served_without_auth(harness: _Harness) -> None:
+    """The page and its assets stay open so the browser can prompt for a token."""
+    client = await _client(
+        WebConfig(auth_token="s3cret", require_auth_for_read=True), harness
+    )
+    try:
+        assert (await client.get("/")).status == 200
+        assert (await client.get("/static/app.js")).status == 200
+        assert (await client.get("/api/state")).status == 401
+    finally:
+        await client.close()
+
+
+def test_static_allowlist_matches_disk() -> None:
+    """Catches adding a file without registering it (and vice versa)."""
+    static_dir = Path(webapp.__file__).parent / "static"
+    on_disk = {p.name for p in static_dir.iterdir() if p.is_file()}
+    assert on_disk == set(webapp._STATIC_ASSETS)
+
+
+def test_index_references_only_allowlisted_assets() -> None:
+    """A renamed asset would otherwise 404 on first paint."""
+    static_dir = Path(webapp.__file__).parent / "static"
+    index = (static_dir / "index.html").read_text()
+    refs = re.findall(r'(?:src|href)="([^"]+)"', index)
+    local = [r for r in refs if not r.startswith(("http:", "https:", "data:", "#"))]
+    assert local, "expected the shell to reference its own assets"
+    for ref in local:
+        assert ref.removeprefix("static/") in webapp._STATIC_ASSETS, ref
 
 
 async def test_state_exposes_ac_output_flag(secured: TestClient) -> None:

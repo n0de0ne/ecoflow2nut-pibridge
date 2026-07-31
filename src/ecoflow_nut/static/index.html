@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EcoFlow DELTA 3 - Bridge</title>
+<link rel="stylesheet" href="static/app.css">
+</head>
+<body>
+<header>
+  <h1>EcoFlow DELTA 3 Bridge</h1>
+  <span id="status" class="status-pill">…</span>
+</header>
+<main>
+  <section class="card">
+    <div class="grid">
+      <div class="metric"><div class="label">State of charge</div>
+        <div class="value"><span id="soc">–</span><span class="unit">%</span></div>
+        <div class="soc-bar"><div id="socFill" class="soc-fill" style="width:0%"></div></div></div>
+      <div class="metric"><div class="label">AC input</div>
+        <div class="value"><span id="acIn">–</span><span class="unit">W</span></div></div>
+      <div class="metric"><div class="label">AC output</div>
+        <div class="value"><span id="acOut">–</span><span class="unit">W</span></div></div>
+      <div class="metric"><div class="label">USB / USB-C</div>
+        <div class="value"><span id="usb">–</span><span class="unit">W</span></div></div>
+      <div class="metric"><div class="label">Runtime est.</div>
+        <div class="value"><span id="runtime">–</span></div></div>
+      <div class="metric"><div class="label">Charge / discharge</div>
+        <div class="value" style="font-size:1.1rem"><span id="remain">–</span></div></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Port controls</h2>
+    <div class="controls">
+      <div class="ctl"><span class="name">AC output</span>
+        <span class="pstat" id="stAc"><span class="led unknown"></span>…</span>
+        <span><button data-out="ac" data-on="1" class="on">On</button>
+        <button data-out="ac" data-on="0" class="off">Off</button></span></div>
+      <div class="ctl"><span class="name">USB</span>
+        <span class="pstat" id="stUsb"><span class="led unknown"></span>…</span>
+        <span><button data-out="usb" data-on="1" class="on">On</button>
+        <button data-out="usb" data-on="0" class="off">Off</button></span></div>
+      <div class="ctl"><span class="name">12V DC</span>
+        <span class="pstat" id="stDc"><span class="led unknown"></span>…</span>
+        <span><button data-out="dc" data-on="1" class="on">On</button>
+        <button data-out="dc" data-on="0" class="off">Off</button></span></div>
+      <div class="ctl" id="eveCtl" style="display:none">
+        <span class="name">Eve outlet <span class="muted" style="text-transform:none">(downstream)</span></span>
+        <span class="pstat" id="stEve"><span class="led unknown"></span>…</span>
+        <span><button data-out="eve" data-on="1" class="on">On</button>
+        <button data-out="eve" data-on="0" class="off">Off</button></span></div>
+      <div class="ctl" id="sbCtl" style="display:none">
+        <span class="name">Server power <span class="muted" style="text-transform:none">(SwitchBot)</span></span>
+        <span><button id="sbPress" class="on">Press</button></span></div>
+    </div>
+    <div id="controlNote" class="muted" style="margin-top:.6rem"></div>
+    <div class="token-row" id="tokenRow" style="display:none">
+      <input id="token" type="password" placeholder="control token" autocomplete="off">
+      <button id="saveToken">Save</button>
+    </div>
+  </section>
+
+  <section class="card" id="energyCard">
+    <h2>Energy &amp; cost <span id="energyRange" class="muted" style="text-transform:none"></span></h2>
+    <div class="grid">
+      <div class="metric"><div class="label">Grid energy</div>
+        <div class="value"><span id="eKwh">–</span><span class="unit">kWh</span></div></div>
+      <div class="metric"><div class="label">Total cost</div>
+        <div class="value"><span id="eCost">–</span></div></div>
+      <div class="metric sm"><div class="label">Heures Creuses</div>
+        <div class="value"><span id="eHc">–</span></div></div>
+      <div class="metric sm"><div class="label">Heures Pleines</div>
+        <div class="value"><span id="eHp">–</span></div></div>
+      <div class="metric sm"><div class="label">Avg / peak draw</div>
+        <div class="value"><span id="eAvg">–</span></div></div>
+      <div class="metric sm"><div class="label">Projected</div>
+        <div class="value"><span id="eProj">–</span></div></div>
+    </div>
+    <div id="energyNote" class="muted" style="margin-top:.5rem"></div>
+  </section>
+
+  <section class="card" id="historyCard">
+    <h2>History</h2>
+    <div class="range">
+      <button data-min="60">1h</button>
+      <button data-min="360">6h</button>
+      <button data-min="1440" class="active">24h</button>
+      <button data-min="10080">7d</button>
+      <button data-min="43200">30d</button>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart" width="940" height="220"></canvas>
+      <div id="tip"></div>
+    </div>
+    <div class="legend">
+      <span style="--c:#7ee2a8">SoC %</span>
+      <span style="--c:#f2c969">AC out W</span>
+      <span style="--c:#a9c2ff">AC in W</span>
+    </div>
+    <div id="historyNote" class="muted"></div>
+  </section>
+
+  <section class="card">
+    <h2>Auto-shutdown</h2>
+    <div class="ctl">
+      <span class="as-badge"><span class="led unknown" id="asLed"></span>
+        <span id="asState">…</span></span>
+      <span><button id="asOn" class="on">Enable</button>
+      <button id="asOff" class="off">Disable</button></span>
+    </div>
+    <div id="asDetail" class="muted" style="margin-top:.6rem"></div>
+  </section>
+
+  <section class="card" id="settingsCard">
+    <h2>Settings</h2>
+    <div id="settingsForm"></div>
+    <div class="save-row">
+      <button id="saveSettings">Save settings</button>
+      <span id="settingsNote" class="muted"></span>
+    </div>
+  </section>
+</main>
+<div id="toast"></div>
+<script src="static/app.js"></script>
+</body>
+</html>
