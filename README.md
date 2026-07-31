@@ -166,7 +166,7 @@ Full annotated example: [`config/config.example.yaml`](config/config.example.yam
 |-----|---------|---------|
 | `ecoflow.mac` | — (required) | BLE MAC of the DELTA 3 |
 | `ecoflow.serial` | — | Device serial (used for auth + reported to NUT) |
-| `ecoflow.poll_interval_seconds` | `5` | How often the NUT file is refreshed from the latest state |
+| `ecoflow.poll_interval_seconds` | `5` | How often the BLE link is checked for liveness — a watchdog, **not** a sample rate (see [How often is data sampled?](#how-often-is-data-sampled)) |
 | `ecoflow.encrypt_type` | `auto` | `auto` reads it from the advertisement; or force `0`/`1`/`7` |
 | `ecoflow.user_id` | `""` | EcoFlow account user id, required for `encrypt_type 7` |
 | `ble.adapter` | `hci0` | BlueZ adapter |
@@ -473,8 +473,10 @@ Tuesday. See [Pricing](#electricity-pricing).
 **Settings** — a dedicated page for the "runtime-safe" config: the full
 auto-shutdown policy (trigger/recover SoC %, grace periods, min-load watts, which
 outputs to cut, restore-on-recovery), NUT thresholds (low/warning %, runtime-low,
-AC-present watts, transfer points), poll interval, battery capacity / nominal
-power, and the electricity pricing. Grouped into sections with a search box;
+AC-present watts, transfer points), the BLE link check, battery capacity /
+nominal power, the electricity pricing, and the history sample interval and
+retention (see [How often is data sampled?](#how-often-is-data-sampled) — this is
+the knob that controls chart detail). Grouped into sections with a search box;
 percentages get a slider bound to a number box; values are validated as you type
 against the same bounds the bridge enforces. Only the fields you actually changed
 are submitted, a counter shows how many are pending, and navigating away with
@@ -506,8 +508,9 @@ cut power, so keep the UI on a trusted network.
 
 #### Telemetry history
 
-When a store is enabled the daemon writes one telemetry sample per poll and the
-dashboard's history charts read it back (down-sampled server-side). The bridge
+When a store is enabled the daemon writes one telemetry sample per frame received
+from the device (subject to `min_interval_seconds`, below) and the dashboard's
+history charts read it back (down-sampled server-side). The bridge
 runs fine if the store is absent or down — logging failures are swallowed and
 never interrupt the NUT path. Both backends store the same columns (`ts, device,
 soc_percent, ac_input_watts, ac_output_watts, usb/usbc watts, input/output watts,
@@ -537,6 +540,39 @@ If you put the UI behind a reverse proxy on a sub-path, proxy `/static/` too —
 the page resolves its assets relative to itself, so a sub-path mount works, but
 only if those requests reach the bridge.
 
+##### How often is data sampled?
+
+**The bridge does not poll the DELTA 3.** It subscribes to a BLE notify
+characteristic and the device pushes `DisplayPropertyUpload` frames on its own
+firmware schedule; the bridge just acks each one to keep the stream flowing.
+There is no command to request a frame or change the device's reporting rate, so
+**the device's push cadence is a hard ceiling on resolution**.
+
+`ecoflow.poll_interval_seconds` is therefore *not* a sample rate, despite the
+name — it only sets how often the bridge checks the link is still up, i.e. how
+long a dropped connection goes unnoticed before reconnecting. Lowering it adds
+no datapoints and sends nothing extra over the radio.
+
+What you actually control is how many of those frames get **stored**:
+
+```yaml
+sqlite:
+  min_interval_seconds: 10   # >= this many seconds between stored rows; 0 = every frame
+  retention_days: 90         # rows older than this are deleted
+```
+
+Lower it for finer charts, at the cost of SD-card writes and disk. Over 90 days,
+roughly: `30` → ~40 MB, `10` → ~115 MB, `5` → ~230 MB, `0` → bounded only by the
+device's push rate. Both values are editable live from the dashboard's
+**Settings → History** section and take effect on the next write, with no
+restart.
+
+Retention is applied at startup and every 6 hours thereafter. Note that deleting
+rows does not shrink the SQLite file — freed pages are reused for new samples, so
+the file plateaus rather than growing without bound. That is deliberate:
+`VACUUM` would rewrite the whole database, which is worse for an SD card than the
+space it reclaims.
+
 **Option A — SQLite (local, self-contained, recommended for a Pi).** A single
 file on the bridge host, no server and **no extra Python dependency** (stdlib
 `sqlite3`). Just enable it:
@@ -545,7 +581,7 @@ file on the bridge host, no server and **no extra Python dependency** (stdlib
 sqlite:
   enabled: true
   path: "/var/lib/ecoflow-nut/telemetry.db"   # persistent (NOT /var/run)
-  min_interval_seconds: 30
+  min_interval_seconds: 10
   retention_days: 90
 ```
 

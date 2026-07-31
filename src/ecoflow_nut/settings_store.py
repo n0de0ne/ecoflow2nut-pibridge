@@ -204,10 +204,13 @@ FIELDS: tuple[Field, ...] = (
         "ecoflow.poll_interval_seconds",
         ("ecoflow", "poll_interval_seconds"),
         "int",
-        "Poll interval (s)",
+        "BLE link check (s)",
         "Device",
         1,
         3600,
+        "How often the bridge checks the BLE link is alive -- a watchdog, not a "
+        "sample rate. The DELTA 3 pushes telemetry on its own schedule and cannot "
+        "be asked to send faster; see History below for chart resolution.",
     ),
     Field(
         "nut.battery_capacity_wh",
@@ -226,6 +229,53 @@ FIELDS: tuple[Field, ...] = (
         "Device",
         1,
         100000,
+    ),
+    # --- Telemetry history ---
+    # Both backends are listed because the schema is static and cannot know which
+    # store is enabled; only one is ever active (Postgres wins if both are on).
+    # These are read per write / per prune, so edits take effect immediately.
+    Field(
+        "sqlite.min_interval_seconds",
+        ("sqlite", "min_interval_seconds"),
+        "int",
+        "SQLite sample interval (s)",
+        "History",
+        0,
+        3600,
+        "Minimum gap between stored samples. Lower = finer charts but more "
+        "SD-card writes; 0 stores every frame. The device's own push rate is the "
+        "ceiling either way.",
+    ),
+    Field(
+        "sqlite.retention_days",
+        ("sqlite", "retention_days"),
+        "int",
+        "SQLite retention (days)",
+        "History",
+        0,
+        3650,
+        "Samples older than this are deleted at the next prune (every 6h). "
+        "Lowering it discards history. 0 keeps everything.",
+    ),
+    Field(
+        "postgres.min_interval_seconds",
+        ("postgres", "min_interval_seconds"),
+        "int",
+        "Postgres sample interval (s)",
+        "History",
+        0,
+        3600,
+        "As above, for the Postgres backend.",
+    ),
+    Field(
+        "postgres.retention_days",
+        ("postgres", "retention_days"),
+        "int",
+        "Postgres retention (days)",
+        "History",
+        0,
+        3650,
+        "As above, for the Postgres backend.",
     ),
     # --- Electricity pricing ---
     Field("pricing.enabled", ("pricing", "enabled"), "bool", "Show cost", "Pricing"),

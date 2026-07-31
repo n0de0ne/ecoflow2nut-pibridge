@@ -179,15 +179,17 @@ class PostgresConfig:
     """Optional Postgres telemetry logging.
 
     Disabled by default. When enabled with a ``dsn`` (or the ECOFLOW_PG_DSN env
-    var), the daemon records one sample row per poll and the web UI's history
+    var), the daemon records one sample row per telemetry frame received from the
+    device -- subject to ``min_interval_seconds`` -- and the web UI's history
     charts read from it. The bridge runs fine with no database.
     """
 
     enabled: bool = False
     dsn: str = ""  # e.g. postgresql://user:pass@host:5432/ecoflow
     table: str = "ecoflow_samples"
-    # Minimum seconds between persisted samples (decouples DB write rate from the
-    # BLE poll interval). 0 logs every complete frame.
+    # Minimum seconds between persisted samples. The device pushes telemetry at
+    # its own cadence, so this is what actually sets stored sample density (and
+    # therefore chart detail). 0 logs every complete frame.
     min_interval_seconds: int = 0
     retention_days: int = 0  # 0 disables automatic pruning of old rows
 
@@ -197,11 +199,12 @@ class SqliteConfig:
     """Optional local SQLite telemetry logging.
 
     Disabled by default. A 100%-local, zero-extra-dependency store (Python stdlib
-    ``sqlite3``): the daemon records one sample row per poll into a single file on
-    the bridge host and the web UI's history charts read from it. Ideal when the
-    bridge should be self-contained with no separate database server. The bridge
-    runs fine if the file can't be written. If both ``postgres`` and ``sqlite``
-    are enabled, Postgres takes precedence.
+    ``sqlite3``): the daemon records one sample row per telemetry frame received
+    from the device -- subject to ``min_interval_seconds`` -- into a single file
+    on the bridge host, and the web UI's history charts read from it. Ideal when
+    the bridge should be self-contained with no separate database server. The
+    bridge runs fine if the file can't be written. If both ``postgres`` and
+    ``sqlite`` are enabled, Postgres takes precedence.
     """
 
     enabled: bool = False

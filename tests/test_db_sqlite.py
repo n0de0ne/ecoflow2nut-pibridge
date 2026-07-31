@@ -224,6 +224,64 @@ async def test_min_interval_throttles_writes(tmp_path: Path) -> None:
         await store.close()
 
 
+async def test_min_interval_change_takes_effect_without_restart(tmp_path: Path) -> None:
+    """The Settings page edits the live config object; the store must honour the
+    new value on its next write rather than the one it was constructed with."""
+    store = await _store(tmp_path, min_interval_seconds=3600)
+    try:
+        await store.record("ecoflow", _state(80, 100), "OB", 3600)
+        await store.record("ecoflow", _state(70, 100), "OB", 3600)  # throttled
+        store._config.min_interval_seconds = 0  # what a live edit does
+        await store.record("ecoflow", _state(60, 100), "OB", 3600)
+        count = store._conn.execute(  # type: ignore[union-attr]
+            "SELECT count(*) AS n FROM ecoflow_samples"
+        ).fetchone()["n"]
+        assert count == 2
+    finally:
+        await store.close()
+
+
+async def test_prune_deletes_only_rows_past_retention(tmp_path: Path) -> None:
+    store = await _store(tmp_path, retention_days=7)
+    try:
+        now = time.time()
+        _insert_at(store, "ecoflow", now - 30 * 86400, 10)  # older than retention
+        _insert_at(store, "ecoflow", now - 1 * 86400, 20)  # inside retention
+        await store.prune("ecoflow")
+        rows = store._conn.execute(  # type: ignore[union-attr]
+            "SELECT soc_percent FROM ecoflow_samples"
+        ).fetchall()
+        assert [r["soc_percent"] for r in rows] == [20]
+    finally:
+        await store.close()
+
+
+async def test_prune_keeps_everything_when_retention_is_zero(tmp_path: Path) -> None:
+    store = await _store(tmp_path, retention_days=0)
+    try:
+        _insert_at(store, "ecoflow", time.time() - 3650 * 86400, 10)
+        await store.prune("ecoflow")
+        count = store._conn.execute(  # type: ignore[union-attr]
+            "SELECT count(*) AS n FROM ecoflow_samples"
+        ).fetchone()["n"]
+        assert count == 1
+    finally:
+        await store.close()
+
+
+async def test_prune_leaves_other_devices_alone(tmp_path: Path) -> None:
+    store = await _store(tmp_path, retention_days=7)
+    try:
+        _insert_at(store, "other-device", time.time() - 30 * 86400, 10)
+        await store.prune("ecoflow")
+        count = store._conn.execute(  # type: ignore[union-attr]
+            "SELECT count(*) AS n FROM ecoflow_samples"
+        ).fetchone()["n"]
+        assert count == 1
+    finally:
+        await store.close()
+
+
 async def test_noop_before_connect() -> None:
     store = SqliteTelemetryStore(SqliteConfig(enabled=True, path=":memory:"))
     assert store.connected is False

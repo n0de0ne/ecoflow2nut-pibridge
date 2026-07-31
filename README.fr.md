@@ -176,7 +176,7 @@ Exemple annoté complet : [`config/config.example.yaml`](config/config.example.y
 |-----|--------|---------------|
 | `ecoflow.mac` | — (requis) | Adresse MAC BLE de la DELTA 3 |
 | `ecoflow.serial` | — | Numéro de série (utilisé pour l'auth + remonté à NUT) |
-| `ecoflow.poll_interval_seconds` | `5` | Fréquence de rafraîchissement du fichier NUT |
+| `ecoflow.poll_interval_seconds` | `5` | Fréquence de vérification du lien BLE — un chien de garde, **pas** une fréquence d'échantillonnage. La DELTA 3 émet sa télémétrie à son propre rythme ; c'est `sqlite.min_interval_seconds` qui détermine la finesse des graphiques |
 | `ecoflow.encrypt_type` | `auto` | `auto` lit le type dans l'annonce BLE ; ou forcez `0`/`1`/`7` |
 | `ecoflow.user_id` | `""` | Identifiant de compte EcoFlow, requis pour `encrypt_type 7` |
 | `ble.adapter` | `hci0` | Adaptateur BlueZ |

@@ -256,7 +256,14 @@ function wireGlobals() {
   });
 }
 
-stateStore.subscribe(s => { renderStatusPill(s); renderFreshness(); });
+stateStore.subscribe(s => {
+  renderStatusPill(s);
+  renderFreshness();
+  // Globally, not per-view: control_enabled only becomes known on the first
+  // /api/state, and a view mounted before then (e.g. a deep link straight to
+  // #/settings) would otherwise keep showing its initial locked state.
+  applyControlLock();
+});
 healthStore.subscribe(renderFreshness);
 
 applyTheme(getTheme());

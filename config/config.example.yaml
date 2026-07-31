@@ -7,6 +7,10 @@ ecoflow:
   # Serial number, printed on the unit / shown in the EcoFlow app.
   serial: "P231XXXXXXXXXXXX"
   model: "delta3"
+  # How often the bridge checks the BLE link is still alive -- a watchdog, NOT a
+  # sample rate. The DELTA 3 pushes telemetry frames on its own schedule and
+  # cannot be asked to send faster; lowering this only shortens how long a
+  # dropped link goes unnoticed. For chart resolution see sqlite.min_interval_seconds.
   poll_interval_seconds: 5
 
   # Encryption handshake. "auto" reads the type from the BLE advertisement.
@@ -79,7 +83,11 @@ sqlite:
   enabled: false
   path: "/var/lib/ecoflow-nut/telemetry.db"   # persistent file (NOT /var/run)
   table: "ecoflow_samples"
-  min_interval_seconds: 30  # min seconds between persisted rows (0 = every frame)
+  # Minimum seconds between persisted rows, and the main control over how
+  # detailed the dashboard's charts are. Lower = finer charts but more SD-card
+  # writes and a bigger file (roughly: 10s ~= 115 MB over 90 days, 5s ~= 230 MB,
+  # 0 = every frame the device sends). Editable live from the web UI.
+  min_interval_seconds: 10
   retention_days: 90        # auto-prune rows older than this (0 = keep forever)
 
 # Option B -- Postgres. For a central/remote database server. Requires the

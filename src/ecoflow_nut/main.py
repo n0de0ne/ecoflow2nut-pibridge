@@ -29,6 +29,9 @@ log = structlog.get_logger(__name__)
 # If no successful BLE read happens within this window, exit so the supervisor
 # (systemd / Docker) restarts us from a clean state.
 WATCHDOG_TIMEOUT_SECONDS = 120
+# How often the retention window is applied. Deleting rows is cheap next to the
+# cost of scanning for them, so there is no reason to do it often.
+PRUNE_INTERVAL_SECONDS = 6 * 3600
 
 
 def seed_state() -> DeviceState:
@@ -130,6 +133,7 @@ class Daemon:
         await self._start_web()
         control = await self._start_control_server()
         watchdog = asyncio.create_task(self._watchdog())
+        pruner = asyncio.create_task(self._prune_loop())
         try:
             backoff = 1.0
             while not self._stop.is_set():
@@ -166,6 +170,7 @@ class Daemon:
                 await self._sleep_or_stop(backoff)
         finally:
             watchdog.cancel()
+            pruner.cancel()
             if control is not None:
                 control.close()
             self._remove_control_socket()
@@ -585,6 +590,21 @@ class Daemon:
                     log.error("auto_shutdown.eve_failed", error=str(exc))
 
         asyncio.create_task(_send())
+
+    async def _prune_loop(self) -> None:
+        """Apply the store's retention window at startup, then periodically.
+
+        Prunes before sleeping so a restart is enough to reclaim space, and so a
+        retention change made in the UI is not deferred by up to a full interval.
+        Both stores no-op when ``retention_days`` is 0 and swallow their own
+        errors, so this can never interrupt the NUT path.
+        """
+        while not self._stop.is_set():
+            if self._store is not None:
+                await self._store.prune(  # type: ignore[attr-defined]
+                    self._config.nut.device_name
+                )
+            await self._sleep_or_stop(PRUNE_INTERVAL_SECONDS)
 
     async def _watchdog(self) -> None:
         while not self._stop.is_set():
