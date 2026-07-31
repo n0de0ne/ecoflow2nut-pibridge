@@ -18,6 +18,7 @@ SQLite shipped by Raspberry Pi OS, which lacks ``unixepoch()``).
 from __future__ import annotations
 
 import asyncio
+import math
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,10 +27,23 @@ from typing import Any
 import structlog
 
 from .config import SqliteConfig
-from .db import _METRIC_COLUMNS, _ident
+from .db import _METRIC_COLUMNS, _ident, bucket_seconds, resolve_window
 from .delta3 import DeviceState
 
 log = structlog.get_logger(__name__)
+
+
+def _window_bounds(since: float, until: float) -> tuple[int, int]:
+    """Whole-second bounds for a window, widened so nothing is truncated inward.
+
+    ``datetime(<int>, 'unixepoch')`` renders the same ``YYYY-MM-DD HH:MM:SS`` UTC
+    shape as the column's ``datetime('now')`` default, so the comparison stays the
+    plain lexicographic one this module relies on. (The ``unixepoch()`` *function*
+    is deliberately avoided -- it needs SQLite 3.38, newer than Raspberry Pi OS
+    ships; the modifier form used here is ancient.)
+    """
+    return math.floor(since), math.ceil(until)
+
 
 # Per-sample columns with their SQLite affinity. Booleans are stored as 0/1.
 _COLUMN_TYPES = {
@@ -149,33 +163,44 @@ class SqliteTelemetryStore:
         self._conn.commit()
 
     async def history(
-        self, device: str, minutes: int, max_points: int = 240
+        self,
+        device: str,
+        minutes: int = 60,
+        max_points: int = 240,
+        *,
+        since: float | None = None,
+        until: float | None = None,
     ) -> list[dict[str, Any]]:
-        """Return down-sampled averages over the last ``minutes`` for a device."""
+        """Return down-sampled averages over a time window for a device.
+
+        The window is either explicit (``since``/``until`` as epoch seconds, used
+        by the chart's zoom and pan) or the last ``minutes``. Buckets are anchored
+        to the Unix epoch rather than to the window start, so panning does not
+        resample onto shifting boundaries (which would make the line shimmer).
+        """
         if self._conn is None:
             return []
-        minutes = max(1, int(minutes))
-        max_points = max(1, int(max_points))
-        bucket_seconds = max(1, (minutes * 60 + max_points - 1) // max_points)
+        start, end = resolve_window(minutes, since, until)
+        bucket = bucket_seconds(end - start, max_points)
         async with self._lock:
-            rows = await asyncio.to_thread(
-                self._history_sync, device, minutes, bucket_seconds
-            )
+            rows = await asyncio.to_thread(self._history_sync, device, start, end, bucket)
         return rows
 
     def _history_sync(
-        self, device: str, minutes: int, bucket_seconds: int
+        self, device: str, since: float, until: float, bucket: int
     ) -> list[dict[str, Any]]:
         assert self._conn is not None
         averages = ", ".join(f"avg({col}) AS {col}" for col in _METRIC_COLUMNS)
         sql = (
             "SELECT (CAST(strftime('%s', ts) AS INTEGER) / ?) * ? AS bucket, "
             f"{averages} FROM {self._table} "
-            "WHERE device = ? AND ts >= datetime('now', ?) "
+            "WHERE device = ? "
+            "  AND ts >= datetime(?, 'unixepoch') "
+            "  AND ts <  datetime(?, 'unixepoch') "
             "GROUP BY bucket ORDER BY bucket ASC"
         )
         rows = self._conn.execute(
-            sql, (bucket_seconds, bucket_seconds, device, f"-{minutes} minutes")
+            sql, (bucket, bucket, device, *_window_bounds(since, until))
         ).fetchall()
         return [
             {
@@ -186,31 +211,39 @@ class SqliteTelemetryStore:
         ]
 
     async def energy_series(
-        self, device: str, minutes: int, bucket_seconds: int
+        self,
+        device: str,
+        minutes: int,
+        bucket_width: int,
+        *,
+        since: float | None = None,
+        until: float | None = None,
     ) -> list[dict[str, Any]]:
         """Average AC in/out watts per fixed-width bucket, for energy costing."""
         if self._conn is None:
             return []
-        minutes = max(1, int(minutes))
-        bucket_seconds = max(1, int(bucket_seconds))
+        start, end = resolve_window(minutes, since, until)
+        bucket_width = max(1, int(bucket_width))
         async with self._lock:
             return await asyncio.to_thread(
-                self._energy_series_sync, device, minutes, bucket_seconds
+                self._energy_series_sync, device, start, end, bucket_width
             )
 
     def _energy_series_sync(
-        self, device: str, minutes: int, bucket_seconds: int
+        self, device: str, since: float, until: float, bucket: int
     ) -> list[dict[str, Any]]:
         assert self._conn is not None
         sql = (
             "SELECT (CAST(strftime('%s', ts) AS INTEGER) / ?) * ? AS bucket, "
             "avg(ac_input_watts) AS in_w, avg(ac_output_watts) AS out_w "
             f"FROM {self._table} "
-            "WHERE device = ? AND ts >= datetime('now', ?) "
+            "WHERE device = ? "
+            "  AND ts >= datetime(?, 'unixepoch') "
+            "  AND ts <  datetime(?, 'unixepoch') "
             "GROUP BY bucket ORDER BY bucket ASC"
         )
         rows = self._conn.execute(
-            sql, (bucket_seconds, bucket_seconds, device, f"-{minutes} minutes")
+            sql, (bucket, bucket, device, *_window_bounds(since, until))
         ).fetchall()
         return [
             {

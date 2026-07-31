@@ -21,6 +21,8 @@ class _Harness:
         self.control_calls: list[tuple[str, bool]] = []
         self.eve_calls: list[bool] = []
         self.switchbot_calls: list[str] = []
+        self.history_calls: list[tuple[float, float, int]] = []
+        self.energy_calls: list[tuple[float, float]] = []
         self.settings_updates: list[dict[str, object]] = []
         self.autoshutdown_enabled = False
         self.fail_control = False
@@ -43,8 +45,14 @@ class _Harness:
         self.switchbot_calls.append(action)
         return f"switchbot {action}"
 
-    async def history(self, minutes: int) -> list[dict[str, object]]:
-        return [{"ts": "2026-06-05T00:00:00", "soc_percent": 50}]
+    async def history(
+        self, *, since: float, until: float, max_points: int
+    ) -> dict[str, object]:
+        self.history_calls.append((since, until, max_points))
+        return {
+            "points": [{"ts": "2026-06-05T00:00:00", "soc_percent": 50}],
+            "bucket_seconds": 30,
+        }
 
     def autoshutdown_status(self) -> dict[str, object]:
         return {"enabled": self.autoshutdown_enabled, "armed": False}
@@ -61,7 +69,8 @@ class _Harness:
         self.settings_updates.append(updates)
         return {"values": updates, "changed": list(updates)}
 
-    async def energy(self, minutes: int) -> dict[str, object]:
+    async def energy(self, *, since: float, until: float) -> dict[str, object]:
+        self.energy_calls.append((since, until))
         return {"enabled": True, "grid_kwh": 1.5, "total_cost": 0.3, "currency": "€"}
 
 
@@ -359,6 +368,61 @@ async def test_history_enabled_returns_points(secured: TestClient) -> None:
     assert body["enabled"] is True
     assert body["minutes"] == 120
     assert body["points"][0]["soc_percent"] == 50
+    assert body["bucket_seconds"] == 30
+
+
+async def test_history_accepts_absolute_window(
+    secured: TestClient, harness: _Harness
+) -> None:
+    """Zoom/pan sends an explicit window; it reaches the store unchanged."""
+    resp = await secured.get("/api/history?since=1700000000&until=1700003600")
+    body = await resp.json()
+    assert (body["since"], body["until"]) == (1700000000, 1700003600)
+    assert body["minutes"] == 60
+    assert harness.history_calls[-1][:2] == (1700000000.0, 1700003600.0)
+
+
+async def test_history_minutes_still_supported(
+    secured: TestClient, harness: _Harness
+) -> None:
+    """The original relative form keeps working for anything already using it."""
+    await secured.get("/api/history?minutes=120")
+    since, until, _ = harness.history_calls[-1]
+    assert until - since == pytest.approx(7200)
+
+
+async def test_history_rejects_inverted_window(secured: TestClient) -> None:
+    resp = await secured.get("/api/history?since=1700003600&until=1700000000")
+    assert resp.status == 400
+
+
+async def test_history_rejects_non_numeric_since(secured: TestClient) -> None:
+    assert (await secured.get("/api/history?since=yesterday")).status == 400
+
+
+async def test_history_clamps_max_points(secured: TestClient, harness: _Harness) -> None:
+    await secured.get("/api/history?max_points=99999")
+    assert harness.history_calls[-1][2] == 2000
+    await secured.get("/api/history?max_points=0")
+    assert harness.history_calls[-1][2] == 2
+
+
+async def test_history_caps_span_to_30_days(
+    secured: TestClient, harness: _Harness
+) -> None:
+    """A pan far into the past is clamped rather than scanning the whole table."""
+    until = 1700000000
+    await secured.get(f"/api/history?since={until - 90 * 24 * 3600}&until={until}")
+    since, got_until, _ = harness.history_calls[-1]
+    assert got_until - since == 30 * 24 * 3600
+
+
+async def test_energy_accepts_absolute_window(
+    secured: TestClient, harness: _Harness
+) -> None:
+    """The energy panel follows the same window as the chart."""
+    await secured.get("/api/energy?since=1700000000&until=1700003600")
+    assert harness.energy_calls[-1] == (1700000000.0, 1700003600.0)
 
 
 async def test_require_auth_for_read_blocks_unauthenticated(harness: _Harness) -> None:

@@ -12,7 +12,9 @@ from pathlib import Path
 
 import structlog
 
-from . import delta3, pricing, settings_store
+# ``db`` is safe to import eagerly: asyncpg is only referenced under TYPE_CHECKING,
+# so this pulls in the shared bucket arithmetic without the optional dependency.
+from . import db, delta3, pricing, settings_store
 from .autoshutdown import AutoShutdownController, ShutdownAction
 from .ble_client import EcoFlowBLE
 from .config import Config, load_config
@@ -256,13 +258,22 @@ class Daemon:
         )
         if self._switchbot is not None:
             eve = {**eve, "switchbot_enabled": True}
+        # The browser plots server timestamps, so it needs this host's clock to
+        # place "now" -- a phone's clock can be minutes off. It also paces its
+        # polling off the device's cadence rather than guessing.
+        common = {
+            "server_time": time.time(),
+            "poll_interval_seconds": self._config.ecoflow.poll_interval_seconds,
+        }
         if s is None:
             return {
                 "status": self._latest_status,
                 "updated_seconds_ago": age,
+                **common,
                 **eve,
             }
         return {
+            **common,
             **eve,
             "soc_percent": s.soc_percent,
             "ac_input_watts": s.ac_input_watts,
@@ -281,26 +292,47 @@ class Daemon:
             "updated_seconds_ago": age,
         }
 
-    async def _web_history(self, minutes: int) -> list[dict[str, object]]:
+    async def _web_history(
+        self, *, since: float, until: float, max_points: int
+    ) -> dict[str, object]:
+        """Down-sampled history over an absolute window, for the UI's chart."""
         if self._store is None:
-            return []
-        return await self._store.history(  # type: ignore[attr-defined]
-            self._config.nut.device_name, minutes
+            return {"points": [], "bucket_seconds": 0}
+        points = await self._store.history(  # type: ignore[attr-defined]
+            self._config.nut.device_name,
+            max_points=max_points,
+            since=since,
+            until=until,
         )
+        # Report the bucket width so the chart can label its resolution without
+        # re-deriving the arithmetic in JS (which would drift).
+        return {
+            "points": points,
+            "bucket_seconds": db.bucket_seconds(until - since, max_points),
+        }
 
-    async def _web_energy(self, minutes: int) -> dict[str, object]:
-        """Energy + HC/HP cost summary over the last ``minutes`` for the UI."""
+    async def _web_energy(self, *, since: float, until: float) -> dict[str, object]:
+        """Energy + HC/HP cost summary over a window, for the UI."""
         if self._store is None:
             return {"enabled": False}
-        minutes = max(1, int(minutes))
-        # ~one bucket per minute, capped so very long ranges stay cheap.
-        bucket_seconds = max(60, (minutes * 60) // 2000 * 1 or 60)
+        span = max(1.0, until - since)
+        # ~one bucket per minute, capped so very long ranges stay cheap. Keep the
+        # 60 s floor: compute_energy classifies buckets by local time-of-day, so
+        # sub-minute buckets add cost without adding accuracy.
+        bucket_seconds = max(60, int(span // 2000) or 60)
         series = await self._store.energy_series(  # type: ignore[attr-defined]
-            self._config.nut.device_name, minutes, bucket_seconds
+            self._config.nut.device_name,
+            0,
+            bucket_seconds,
+            since=since,
+            until=until,
         )
         summary = pricing.compute_energy(series, bucket_seconds, self._config.pricing)
         summary["enabled"] = True
-        summary["minutes"] = minutes
+        summary["minutes"] = round(span / 60)
+        summary["since"] = since
+        summary["until"] = until
+        summary["bucket_seconds"] = bucket_seconds
         return summary
 
     def _get_settings(self) -> dict[str, object]:

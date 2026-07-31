@@ -39,6 +39,36 @@ _METRIC_COLUMNS = (
 )
 
 
+def bucket_seconds(span_seconds: float, max_points: int) -> int:
+    """Bucket width so a window of ``span_seconds`` yields <= ``max_points``.
+
+    Shared by both backends (and by the web layer, which reports it to the
+    browser so the chart can label its resolution) to keep the arithmetic in one
+    place. Rounds up, so the point count is never exceeded.
+    """
+    span = max(1, int(span_seconds))
+    points = max(1, int(max_points))
+    return max(1, (span + points - 1) // points)
+
+
+def resolve_window(
+    minutes: int,
+    since: float | None,
+    until: float | None,
+) -> tuple[float, float]:
+    """Normalise a history request to an absolute ``(since, until)`` window.
+
+    Callers may pass an explicit window (zoom/pan) or fall back to the legacy
+    "last N minutes". ``until`` defaults to now, and ``since`` to ``minutes``
+    before it.
+    """
+    resolved_until = float(until) if until is not None else time.time()
+    resolved_since = (
+        float(since) if since is not None else resolved_until - max(1, int(minutes)) * 60
+    )
+    return resolved_since, resolved_until
+
+
 def _ident(name: str) -> str:
     """Validate a SQL identifier (table name) we interpolate into DDL/queries.
 
@@ -151,20 +181,30 @@ class TelemetryStore:
             log.warning("db.record_failed", error=str(exc))
 
     async def history(
-        self, device: str, minutes: int, max_points: int = 240
+        self,
+        device: str,
+        minutes: int = 60,
+        max_points: int = 240,
+        *,
+        since: float | None = None,
+        until: float | None = None,
     ) -> list[dict[str, Any]]:
-        """Return down-sampled averages over the last ``minutes`` for a device.
+        """Return down-sampled averages over a time window for a device.
 
-        Rows are bucketed so the result has at most ~``max_points`` points; each
-        bucket reports the average of its metrics. Buckets are returned oldest
-        first, which is what the dashboard chart expects.
+        The window is either explicit (``since``/``until`` as epoch seconds, used
+        by the chart's zoom and pan) or the last ``minutes``. Rows are bucketed so
+        the result has at most ~``max_points`` points; each bucket reports the
+        average of its metrics. Buckets are returned oldest first, which is what
+        the dashboard chart expects.
+
+        Buckets are anchored to the Unix epoch rather than to the window start, so
+        panning does not resample onto shifting boundaries (which would make the
+        line visibly shimmer as you drag).
         """
         if self._pool is None:
             return []
-        minutes = max(1, int(minutes))
-        max_points = max(1, int(max_points))
-        # Bucket width in seconds, rounded up so we never exceed max_points.
-        bucket_seconds = max(1, (minutes * 60 + max_points - 1) // max_points)
+        start, end = resolve_window(minutes, since, until)
+        bucket = bucket_seconds(end - start, max_points)
         averages = ", ".join(f"avg({col})::real AS {col}" for col in _METRIC_COLUMNS)
         rows = await self._pool.fetch(
             f"""
@@ -172,13 +212,14 @@ class TelemetryStore:
                 date_bin(make_interval(secs => $2), ts, 'epoch') AS bucket,
                 {averages}
             FROM {self._table}
-            WHERE device = $1 AND ts >= now() - make_interval(mins => $3)
+            WHERE device = $1 AND ts >= to_timestamp($3) AND ts < to_timestamp($4)
             GROUP BY bucket
             ORDER BY bucket ASC
             """,
             device,
-            bucket_seconds,
-            minutes,
+            bucket,
+            start,
+            end,
         )
         return [
             {"ts": r["bucket"].isoformat(), **{c: r[c] for c in _METRIC_COLUMNS}}
@@ -186,13 +227,19 @@ class TelemetryStore:
         ]
 
     async def energy_series(
-        self, device: str, minutes: int, bucket_seconds: int
+        self,
+        device: str,
+        minutes: int,
+        bucket_width: int,
+        *,
+        since: float | None = None,
+        until: float | None = None,
     ) -> list[dict[str, Any]]:
         """Average AC in/out watts per fixed-width bucket, for energy costing."""
         if self._pool is None:
             return []
-        minutes = max(1, int(minutes))
-        bucket_seconds = max(1, int(bucket_seconds))
+        start, end = resolve_window(minutes, since, until)
+        bucket_width = max(1, int(bucket_width))
         rows = await self._pool.fetch(
             f"""
             SELECT
@@ -200,13 +247,14 @@ class TelemetryStore:
                 avg(ac_input_watts)::real AS in_w,
                 avg(ac_output_watts)::real AS out_w
             FROM {self._table}
-            WHERE device = $1 AND ts >= now() - make_interval(mins => $3)
+            WHERE device = $1 AND ts >= to_timestamp($3) AND ts < to_timestamp($4)
             GROUP BY bucket
             ORDER BY bucket ASC
             """,
             device,
-            bucket_seconds,
-            minutes,
+            bucket_width,
+            start,
+            end,
         )
         return [
             {"ts": r["bucket"].isoformat(), "in_w": r["in_w"], "out_w": r["out_w"]}

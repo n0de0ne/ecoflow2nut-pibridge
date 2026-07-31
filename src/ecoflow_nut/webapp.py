@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import time
 from collections.abc import Awaitable, Callable
 from importlib.resources import files
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import structlog
 
@@ -38,13 +39,31 @@ StateProvider = Callable[[], dict[str, Any]]
 ControlFn = Callable[[str, bool], Awaitable[str]]
 EveControlFn = Callable[[bool], Awaitable[str]]
 SwitchBotFn = Callable[[str], Awaitable[str]]
-HistoryFn = Callable[[int], Awaitable[list[dict[str, Any]]]]
 AutoStatusFn = Callable[[], dict[str, Any]]
 GetSettingsFn = Callable[[], dict[str, Any]]
 UpdateSettingsFn = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
-EnergyFn = Callable[[int], Awaitable[dict[str, Any]]]
+
+
+class HistoryFn(Protocol):
+    """Down-sampled history over an absolute window."""
+
+    async def __call__(
+        self, *, since: float, until: float, max_points: int
+    ) -> dict[str, Any]: ...
+
+
+class EnergyFn(Protocol):
+    """Energy + cost summary over an absolute window."""
+
+    async def __call__(self, *, since: float, until: float) -> dict[str, Any]: ...
+
 
 _VALID_OUTPUTS = ("ac", "usb", "dc")
+
+# Window guards. The span cap bounds the worst-case query on a Pi's SD card; the
+# point cap bounds the JSON we serialise for a browser that asks for too much.
+_MAX_SPAN_SECONDS = 30 * 24 * 3600
+_MAX_POINTS = 2000
 
 # The browser-facing assets, as an explicit allowlist: the ``/static/{name}``
 # handler is a dict lookup, so no request can escape this set (and aiohttp's
@@ -224,13 +243,20 @@ class WebServer:
         self._require_read_auth(request)
         if not self._history_enabled:
             return web.json_response({"enabled": False, "points": []})
-        try:
-            minutes = int(request.query.get("minutes", "60"))
-        except ValueError:
-            raise web.HTTPBadRequest(reason="minutes must be an integer") from None
-        minutes = max(1, min(minutes, 60 * 24 * 30))  # cap at 30 days
-        points = await self._history(minutes)
-        return web.json_response({"enabled": True, "minutes": minutes, "points": points})
+        since, until = _window_from_query(request, default_minutes=60)
+        max_points = _int_query(request, "max_points", 240, 2, _MAX_POINTS)
+        result = await self._history(since=since, until=until, max_points=max_points)
+        return web.json_response(
+            {
+                "enabled": True,
+                "since": since,
+                "until": until,
+                "minutes": round((until - since) / 60),
+                "max_points": max_points,
+                "bucket_seconds": result.get("bucket_seconds", 0),
+                "points": result.get("points", []),
+            }
+        )
 
     async def _handle_energy(self, request: web.Request) -> web.Response:
         from aiohttp import web
@@ -238,12 +264,8 @@ class WebServer:
         self._require_read_auth(request)
         if not self._history_enabled:
             return web.json_response({"enabled": False})
-        try:
-            minutes = int(request.query.get("minutes", "1440"))
-        except ValueError:
-            raise web.HTTPBadRequest(reason="minutes must be an integer") from None
-        minutes = max(1, min(minutes, 60 * 24 * 30))
-        return web.json_response(await self._energy(minutes))
+        since, until = _window_from_query(request, default_minutes=1440)
+        return web.json_response(await self._energy(since=since, until=until))
 
     async def _handle_autoshutdown_get(self, request: web.Request) -> web.Response:
         from aiohttp import web
@@ -313,6 +335,64 @@ class WebServer:
             raise web.HTTPConflict(reason=str(exc)) from exc
         log.info("web.switchbot", action=action)
         return web.json_response({"ok": True, "message": message})
+
+
+def _float_query(request: web.Request, name: str) -> float | None:
+    """Parse an optional epoch-seconds query parameter."""
+    from aiohttp import web
+
+    raw = request.query.get(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        raise web.HTTPBadRequest(reason=f"{name} must be epoch seconds") from None
+
+
+def _int_query(request: web.Request, name: str, default: int, lo: int, hi: int) -> int:
+    """Parse an optional integer query parameter, clamped to ``[lo, hi]``."""
+    from aiohttp import web
+
+    raw = request.query.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise web.HTTPBadRequest(reason=f"{name} must be an integer") from None
+    return max(lo, min(value, hi))
+
+
+def _window_from_query(
+    request: web.Request, *, default_minutes: int
+) -> tuple[float, float]:
+    """Resolve the requested time window to absolute epoch seconds.
+
+    Accepts either an explicit ``since``/``until`` pair (what the chart sends as
+    you zoom and pan) or the original ``minutes=N``, which stays supported. This
+    is the single place relative windows become absolute -- everything below it
+    only ever speaks absolute time.
+
+    A window that lies in the future is not an error: live mode keeps the right
+    edge slightly ahead of now, and an empty result is the correct answer.
+    """
+    from aiohttp import web
+
+    until = _float_query(request, "until")
+    since = _float_query(request, "since")
+    if until is None:
+        until = time.time()
+    if since is None:
+        minutes = _int_query(
+            request, "minutes", default_minutes, 1, _MAX_SPAN_SECONDS // 60
+        )
+        since = until - minutes * 60
+    if until <= since:
+        raise web.HTTPBadRequest(reason="until must be greater than since")
+    if until - since > _MAX_SPAN_SECONDS:
+        since = until - _MAX_SPAN_SECONDS
+    return since, until
 
 
 async def _json_body(request: web.Request) -> dict[str, Any]:
