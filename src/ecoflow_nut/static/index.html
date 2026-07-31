@@ -2,126 +2,227 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
 <title>EcoFlow DELTA 3 - Bridge</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>&#9889;</text></svg>">
 <link rel="stylesheet" href="static/app.css">
+<script>
+  // Set the theme before first paint so a dark-mode user never sees a flash.
+  try {
+    var t = localStorage.getItem("ecoflow_theme");
+    if (t && t !== "auto") document.documentElement.setAttribute("data-theme", t);
+  } catch (e) {}
+</script>
 </head>
 <body>
-<header>
-  <h1>EcoFlow DELTA 3 Bridge</h1>
-  <span id="status" class="status-pill">…</span>
+
+<header class="appbar">
+  <h1>EcoFlow DELTA 3</h1>
+  <span id="status" class="status-pill" aria-live="polite">…</span>
+  <button id="freshness" class="chip" type="button" title="Refresh now">
+    <span class="dot"></span><span id="freshnessText">connecting</span>
+  </button>
+  <button id="lockBtn" class="icon-btn" type="button" title="Control token" aria-label="Control token">🔑</button>
+  <button id="themeBtn" class="icon-btn" type="button" title="Theme" aria-label="Toggle theme">◐</button>
 </header>
+
+<nav class="nav" aria-label="Views">
+  <a href="#/dashboard" data-nav="dashboard"><span class="nav-icon">▦</span><span class="nav-label">Dashboard</span></a>
+  <a href="#/history" data-nav="history"><span class="nav-icon">📈</span><span class="nav-label">History</span></a>
+  <a href="#/energy" data-nav="energy"><span class="nav-icon">⚡</span><span class="nav-label">Energy</span></a>
+  <a href="#/settings" data-nav="settings"><span class="nav-icon">⚙</span><span class="nav-label">Settings</span></a>
+</nav>
+
 <main>
-  <section class="card">
-    <div class="grid">
-      <div class="metric"><div class="label">State of charge</div>
-        <div class="value"><span id="soc">–</span><span class="unit">%</span></div>
-        <div class="soc-bar"><div id="socFill" class="soc-fill" style="width:0%"></div></div></div>
-      <div class="metric"><div class="label">AC input</div>
-        <div class="value"><span id="acIn">–</span><span class="unit">W</span></div></div>
-      <div class="metric"><div class="label">AC output</div>
-        <div class="value"><span id="acOut">–</span><span class="unit">W</span></div></div>
-      <div class="metric"><div class="label">USB / USB-C</div>
-        <div class="value"><span id="usb">–</span><span class="unit">W</span></div></div>
-      <div class="metric"><div class="label">Runtime est.</div>
-        <div class="value"><span id="runtime">–</span></div></div>
-      <div class="metric"><div class="label">Charge / discharge</div>
-        <div class="value" style="font-size:1.1rem"><span id="remain">–</span></div></div>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section data-view="dashboard" hidden>
+    <div class="card">
+      <div class="grid">
+        <div class="metric">
+          <div class="label">State of charge</div>
+          <div class="value"><span id="soc">–</span><span class="unit">%</span></div>
+          <div class="soc-bar"><div id="socFill" class="soc-fill" style="width:0%"></div></div>
+        </div>
+        <div class="metric"><div class="label">AC input</div>
+          <div class="value"><span id="acIn">–</span><span class="unit">W</span></div></div>
+        <div class="metric"><div class="label">AC output</div>
+          <div class="value"><span id="acOut">–</span><span class="unit">W</span></div></div>
+        <div class="metric"><div class="label">USB / USB-C</div>
+          <div class="value"><span id="usb">–</span><span class="unit">W</span></div></div>
+        <div class="metric"><div class="label">Runtime est.</div>
+          <div class="value"><span id="runtime">–</span></div></div>
+        <div class="metric"><div class="label">Charge / discharge</div>
+          <div class="value sm"><span id="remain">–</span></div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Port controls</h2>
+      <div class="controls">
+        <div class="ctl"><span class="name">AC output</span>
+          <span class="pstat" id="stAc"><span class="led unknown"></span>…</span>
+          <span class="ctl-actions">
+            <button data-out="ac" data-on="1" class="on" type="button">On</button>
+            <button data-out="ac" data-on="0" class="off" type="button">Off</button></span></div>
+        <div class="ctl"><span class="name">USB</span>
+          <span class="pstat" id="stUsb"><span class="led unknown"></span>…</span>
+          <span class="ctl-actions">
+            <button data-out="usb" data-on="1" class="on" type="button">On</button>
+            <button data-out="usb" data-on="0" class="off" type="button">Off</button></span></div>
+        <div class="ctl"><span class="name">12V DC</span>
+          <span class="pstat" id="stDc"><span class="led unknown"></span>…</span>
+          <span class="ctl-actions">
+            <button data-out="dc" data-on="1" class="on" type="button">On</button>
+            <button data-out="dc" data-on="0" class="off" type="button">Off</button></span></div>
+        <div class="ctl" id="eveCtl" hidden>
+          <span class="name">Eve outlet <span class="muted">(downstream)</span></span>
+          <span class="pstat" id="stEve"><span class="led unknown"></span>…</span>
+          <span class="ctl-actions">
+            <button data-out="eve" data-on="1" class="on" type="button">On</button>
+            <button data-out="eve" data-on="0" class="off" type="button">Off</button></span></div>
+        <div class="ctl" id="sbCtl" hidden>
+          <span class="name">Server power <span class="muted">(SwitchBot)</span></span>
+          <span class="ctl-actions"><button id="sbPress" class="on" type="button">Press</button></span></div>
+      </div>
+      <p id="controlNote" class="muted"></p>
+    </div>
+
+    <div class="card">
+      <h2>Auto-shutdown</h2>
+      <div class="ctl">
+        <span class="as-badge"><span class="led unknown" id="asLed"></span><span id="asState">…</span></span>
+        <span class="ctl-actions">
+          <button id="asOn" class="on" type="button">Enable</button>
+          <button id="asOff" class="off" type="button">Disable</button></span>
+      </div>
+      <p id="asDetail" class="muted"></p>
+      <a class="link" href="#/settings">Configure policy →</a>
     </div>
   </section>
 
-  <section class="card">
-    <h2>Port controls</h2>
-    <div class="controls">
-      <div class="ctl"><span class="name">AC output</span>
-        <span class="pstat" id="stAc"><span class="led unknown"></span>…</span>
-        <span><button data-out="ac" data-on="1" class="on">On</button>
-        <button data-out="ac" data-on="0" class="off">Off</button></span></div>
-      <div class="ctl"><span class="name">USB</span>
-        <span class="pstat" id="stUsb"><span class="led unknown"></span>…</span>
-        <span><button data-out="usb" data-on="1" class="on">On</button>
-        <button data-out="usb" data-on="0" class="off">Off</button></span></div>
-      <div class="ctl"><span class="name">12V DC</span>
-        <span class="pstat" id="stDc"><span class="led unknown"></span>…</span>
-        <span><button data-out="dc" data-on="1" class="on">On</button>
-        <button data-out="dc" data-on="0" class="off">Off</button></span></div>
-      <div class="ctl" id="eveCtl" style="display:none">
-        <span class="name">Eve outlet <span class="muted" style="text-transform:none">(downstream)</span></span>
-        <span class="pstat" id="stEve"><span class="led unknown"></span>…</span>
-        <span><button data-out="eve" data-on="1" class="on">On</button>
-        <button data-out="eve" data-on="0" class="off">Off</button></span></div>
-      <div class="ctl" id="sbCtl" style="display:none">
-        <span class="name">Server power <span class="muted" style="text-transform:none">(SwitchBot)</span></span>
-        <span><button id="sbPress" class="on">Press</button></span></div>
-    </div>
-    <div id="controlNote" class="muted" style="margin-top:.6rem"></div>
-    <div class="token-row" id="tokenRow" style="display:none">
-      <input id="token" type="password" placeholder="control token" autocomplete="off">
-      <button id="saveToken">Save</button>
+  <!-- ---------------------------------------------------------------- -->
+  <section data-view="history" hidden>
+    <div class="card">
+      <div class="toolbar">
+        <div class="range" role="group" aria-label="Time range">
+          <button data-min="60" type="button">1h</button>
+          <button data-min="360" type="button">6h</button>
+          <button data-min="1440" class="active" type="button">24h</button>
+          <button data-min="10080" type="button">7d</button>
+          <button data-min="43200" type="button">30d</button>
+        </div>
+        <div class="toolbar-right">
+          <button id="chartLive" class="ghost" type="button" title="Follow the latest data">● Live</button>
+          <button id="chartReset" class="ghost" type="button">Reset</button>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="chart" tabindex="0" role="img"
+                aria-label="Telemetry over time. Use arrow keys to pan and +/- to zoom."></canvas>
+      </div>
+      <div id="chartLegend" class="legend"></div>
+      <p id="historyNote" class="muted"></p>
+      <p class="muted hint">Scroll or pinch to zoom · drag to pan · arrow keys when focused</p>
     </div>
   </section>
 
-  <section class="card" id="energyCard">
-    <h2>Energy &amp; cost <span id="energyRange" class="muted" style="text-transform:none"></span></h2>
-    <div class="grid">
-      <div class="metric"><div class="label">Grid energy</div>
-        <div class="value"><span id="eKwh">–</span><span class="unit">kWh</span></div></div>
-      <div class="metric"><div class="label">Total cost</div>
-        <div class="value"><span id="eCost">–</span></div></div>
-      <div class="metric sm"><div class="label">Heures Creuses</div>
-        <div class="value"><span id="eHc">–</span></div></div>
-      <div class="metric sm"><div class="label">Heures Pleines</div>
-        <div class="value"><span id="eHp">–</span></div></div>
-      <div class="metric sm"><div class="label">Avg / peak draw</div>
-        <div class="value"><span id="eAvg">–</span></div></div>
-      <div class="metric sm"><div class="label">Projected</div>
-        <div class="value"><span id="eProj">–</span></div></div>
+  <!-- ---------------------------------------------------------------- -->
+  <section data-view="energy" hidden>
+    <div class="card">
+      <h2>Energy &amp; cost <span id="energyRange" class="muted"></span></h2>
+      <div class="grid">
+        <div class="metric"><div class="label">Grid energy</div>
+          <div class="value"><span id="eKwh">–</span><span class="unit">kWh</span></div></div>
+        <div class="metric"><div class="label">Total cost</div>
+          <div class="value"><span id="eCost">–</span></div></div>
+        <div class="metric sm"><div class="label">Heures Creuses</div>
+          <div class="value"><span id="eHc">–</span></div></div>
+        <div class="metric sm"><div class="label">Heures Pleines</div>
+          <div class="value"><span id="eHp">–</span></div></div>
+        <div class="metric sm"><div class="label">Avg / peak draw</div>
+          <div class="value"><span id="eAvg">–</span></div></div>
+        <div class="metric sm"><div class="label">Projected</div>
+          <div class="value"><span id="eProj">–</span></div></div>
+      </div>
+      <p id="energyNote" class="muted"></p>
     </div>
-    <div id="energyNote" class="muted" style="margin-top:.5rem"></div>
   </section>
 
-  <section class="card" id="historyCard">
-    <h2>History</h2>
-    <div class="range">
-      <button data-min="60">1h</button>
-      <button data-min="360">6h</button>
-      <button data-min="1440" class="active">24h</button>
-      <button data-min="10080">7d</button>
-      <button data-min="43200">30d</button>
+  <!-- ---------------------------------------------------------------- -->
+  <section data-view="settings" hidden>
+    <div class="card">
+      <div class="toolbar">
+        <input id="settingsSearch" type="search" placeholder="Search settings…"
+               aria-label="Search settings" autocomplete="off">
+        <span id="settingsCount" class="muted"></span>
+      </div>
+      <p id="settingsLocked" class="muted"></p>
     </div>
-    <div class="chart-wrap">
-      <canvas id="chart" width="940" height="220"></canvas>
-      <div id="tip"></div>
+    <div id="settingsGroups"></div>
+
+    <div class="card">
+      <h2>Access</h2>
+      <p class="muted">The control token is stored in this browser only. It can cut
+        power, so keep this page on a trusted network.</p>
+      <div class="save-row">
+        <button id="tokenOpen" class="ghost" type="button">Set control token…</button>
+        <button id="tokenClear" class="ghost" type="button">Sign out</button>
+      </div>
     </div>
-    <div class="legend">
-      <span style="--c:#7ee2a8">SoC %</span>
-      <span style="--c:#f2c969">AC out W</span>
-      <span style="--c:#a9c2ff">AC in W</span>
+
+    <div class="card">
+      <h2>This browser only</h2>
+      <div class="frow">
+        <label for="prefTheme">Theme<span class="help">Not stored on the bridge.</span></label>
+        <select id="prefTheme">
+          <option value="auto">Match system</option>
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+        </select>
+      </div>
+      <div class="frow">
+        <label for="prefRefresh">Refresh rate<span class="help">“Auto” follows the bridge’s poll interval.</span></label>
+        <select id="prefRefresh">
+          <option value="auto">Auto</option>
+          <option value="1000">1 s</option>
+          <option value="2000">2 s</option>
+          <option value="5000">5 s</option>
+          <option value="15000">15 s</option>
+          <option value="30000">30 s</option>
+        </select>
+      </div>
     </div>
-    <div id="historyNote" class="muted"></div>
   </section>
 
-  <section class="card">
-    <h2>Auto-shutdown</h2>
-    <div class="ctl">
-      <span class="as-badge"><span class="led unknown" id="asLed"></span>
-        <span id="asState">…</span></span>
-      <span><button id="asOn" class="on">Enable</button>
-      <button id="asOff" class="off">Disable</button></span>
-    </div>
-    <div id="asDetail" class="muted" style="margin-top:.6rem"></div>
-  </section>
-
-  <section class="card" id="settingsCard">
-    <h2>Settings</h2>
-    <div id="settingsForm"></div>
-    <div class="save-row">
-      <button id="saveSettings">Save settings</button>
-      <span id="settingsNote" class="muted"></span>
-    </div>
-  </section>
 </main>
-<div id="toast"></div>
-<script src="static/app.js"></script>
+
+<div id="saveBar" class="save-bar" hidden>
+  <span id="saveBarText">No changes</span>
+  <span class="save-bar-actions">
+    <button id="revertSettings" class="ghost" type="button">Revert</button>
+    <button id="saveSettings" class="primary" type="button">Save</button>
+  </span>
+</div>
+
+<dialog id="tokenDialog">
+  <form method="dialog">
+    <h2>Unlock controls</h2>
+    <p class="muted">Enter the bridge's <code>auth_token</code> to enable port
+      toggles, auto-shutdown and settings.</p>
+    <input id="tokenInput" type="password" placeholder="control token"
+           autocomplete="current-password" aria-label="Control token">
+    <label class="inline"><input id="tokenRemember" type="checkbox" checked> Remember on this device</label>
+    <p id="tokenError" class="error" hidden></p>
+    <menu>
+      <button value="cancel" class="ghost" type="submit">Cancel</button>
+      <button id="tokenSave" value="save" class="primary" type="submit">Unlock</button>
+    </menu>
+  </form>
+</dialog>
+
+<div id="toasts" role="status" aria-live="polite"></div>
+<script type="module" src="static/app.js"></script>
 </body>
 </html>

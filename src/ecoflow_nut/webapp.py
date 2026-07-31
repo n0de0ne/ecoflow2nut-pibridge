@@ -74,6 +74,9 @@ _STATIC_ASSETS: dict[str, str] = {
     "index.html": "text/html",
     "app.css": "text/css",
     "app.js": "text/javascript",
+    "core.js": "text/javascript",
+    "chart.js": "text/javascript",
+    "views.js": "text/javascript",
 }
 
 # name -> (body, etag), populated lazily and cached for the process lifetime.
@@ -140,6 +143,7 @@ class WebServer:
                 web.get("/api/history", self._handle_history),
                 web.get("/api/energy", self._handle_energy),
                 web.get("/api/autoshutdown", self._handle_autoshutdown_get),
+                web.get("/api/auth/check", self._handle_auth_check),
                 web.get("/api/settings", self._handle_settings_get),
                 web.post("/api/settings", self._handle_settings_set),
                 web.post("/api/control", self._handle_control),
@@ -272,6 +276,17 @@ class WebServer:
 
         self._require_read_auth(request)
         return web.json_response(self._autoshutdown_status())
+
+    async def _handle_auth_check(self, request: web.Request) -> web.Response:
+        """Validate a token without performing an action.
+
+        Lets the browser's unlock dialog say "that token was not accepted" up
+        front, rather than storing a typo and failing on the next control action.
+        """
+        from aiohttp import web
+
+        self._require_control_auth(request)
+        return web.json_response({"ok": True})
 
     async def _handle_settings_get(self, request: web.Request) -> web.Response:
         from aiohttp import web
