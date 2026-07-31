@@ -429,47 +429,80 @@ ECOFLOW_WEB_TOKEN=somesecret ecoflow-nut --config config.yaml run
 # open http://<bridge-host>:8080
 ```
 
-The dashboard shows SoC, AC in/out watts, USB/USB-C watts, status, runtime and
-charge/discharge estimates (auto-refreshing), with on/off buttons for **AC**,
-**USB** and **12V DC**, plus the auto-shutdown state (and a live enable/disable).
-When the [HomeKit outlet](#per-load-shedding-with-a-homekit-outlet) is enabled, a
-fourth **Eve outlet** control appears in the same panel (showing its last
-commanded on/off state), and a [SwitchBot](#server-power-button-switchbot) **Press**
-button if that's enabled. The published Docker image already includes the web +
-Postgres extras; just set `web.enabled: true` and expose port 8080.
+The UI is a small single-page app with four tabs — a side rail on a desktop, a
+bottom tab bar on a phone. Each tab is a real link (`#/dashboard`, `#/history`,
+`#/energy`, `#/settings`), so they can be bookmarked and the back button works.
+The published Docker image already includes the web + Postgres extras; just set
+`web.enabled: true` and expose port 8080.
 
-It also provides:
+**Dashboard** — SoC, AC in/out watts, USB/USB-C watts, status, runtime and
+charge/discharge estimates, with on/off buttons for **AC**, **USB** and **12V
+DC**, plus the auto-shutdown state and a live enable/disable. When the
+[HomeKit outlet](#per-load-shedding-with-a-homekit-outlet) is enabled, a fourth
+**Eve outlet** control appears (showing its last commanded on/off state), and a
+[SwitchBot](#server-power-button-switchbot) **Press** button if that's enabled.
 
-* **Visual status indicators** — a coloured LED next to each control. The **AC**
-  output shows a true ON/OFF from the device's decoded flag (`flow_info_ac_out`).
-  **USB** is inferred from power draw (the device exposes no USB enable flag), so
-  it reads `ON · NW` when drawing and `— idle/off` otherwise — 0 W is ambiguous,
-  noted in its tooltip. **12V DC** shows `n/a` (the device sends no DC
-  telemetry). The **auto-shutdown** badge is grey *Disabled*, green *Monitoring*,
-  pulsing amber *ARMED · cutting in Ns*, or pulsing red *CUT sent*.
-* **Live settings editing** — a Settings panel edits "runtime-safe" config from
-  the browser: the full auto-shutdown policy (trigger/recover SoC %, grace
-  periods, min-load watts, which outputs to cut, restore-on-recovery), NUT
-  thresholds (low/warning %, runtime-low, AC-present watts, transfer points),
-  poll interval, battery capacity / nominal power, and the electricity pricing.
-  Changes apply **immediately** (no restart) and persist to `settings_file`
-  (`/var/lib/ecoflow-nut/settings.json`), which is overlaid back onto the YAML
-  at the next startup. Edits require the control token.
-* **USB-off guard** — turning the USB output off pops a confirmation, since the
-  bridge host (a Pi) is often powered from the DELTA 3's USB port.
-* **Hover detail** — the history chart shows the exact SoC / AC-in / AC-out
-  values (and local time) at the point under your cursor.
-* **Energy & cost** — when history logging is on, an Energy panel reports grid
-  energy (kWh), the **Heures Creuses / Heures Pleines** split and cost, average
-  and peak draw, and a projected €/day and €/month — so you can see what your
-  network stack and server cost to run. See [Pricing](#electricity-pricing).
+A coloured LED sits next to each control. **AC** shows a true ON/OFF from the
+device's decoded flag (`flow_info_ac_out`). **USB** is inferred from power draw
+(the device exposes no USB enable flag), so it reads `ON · NW` when drawing and
+`— idle/off` otherwise — 0 W is ambiguous, noted in its tooltip. **12V DC** shows
+`n/a` (the device sends no DC telemetry). The **auto-shutdown** badge is grey
+*Disabled*, green *Monitoring*, pulsing amber *ARMED · cutting in Ns*, or pulsing
+red *CUT sent*. Turning the USB output off pops a confirmation, since the bridge
+host is often powered from the DELTA 3's USB port.
 
-**Auth.** Control actions (port toggles, auto-shutdown) require `auth_token` —
-sent as an `X-Auth-Token` header, `Authorization: Bearer`, or `?token=`. The
-browser prompts for it and stores it locally. If no token is configured the
-controls are disabled and only the read-only dashboard is served; set
-`require_auth_for_read: true` to also gate telemetry. The token can cut power, so
-keep the UI on a trusted network.
+**History** — a chart you can navigate. Scroll or pinch to zoom about the
+cursor, drag to pan, double-click or **Reset** to go back to the selected range.
+**Live** pins the right edge to now and un-pins as soon as you pan away. Zooming
+in genuinely increases resolution: the window is re-fetched at a bucket width
+derived from the canvas width, and the caption tells you what you're looking at
+("330 points · 4 min average"). Hovering snaps a crosshair to the nearest actual
+sample and reads out every series at that point; over a gap in the data it
+disappears rather than inventing a value, and lines break across outages instead
+of drawing through them. Every stored metric is chartable — SoC, AC in/out, USB,
+and total input/output watts — toggled from the legend and remembered per
+browser. With the canvas focused, arrow keys pan, `+`/`-` zoom, `Home`/`End` jump
+to the ends, and `1`–`5` pick a range preset.
+
+**Energy** — when history logging is on, grid energy (kWh), the **Heures Creuses
+/ Heures Pleines** split and cost, average and peak draw, and a projected €/day
+and €/month, so you can see what your network stack and server cost to run. It
+follows the same window as the chart, so zooming into last Tuesday costs last
+Tuesday. See [Pricing](#electricity-pricing).
+
+**Settings** — a dedicated page for the "runtime-safe" config: the full
+auto-shutdown policy (trigger/recover SoC %, grace periods, min-load watts, which
+outputs to cut, restore-on-recovery), NUT thresholds (low/warning %, runtime-low,
+AC-present watts, transfer points), poll interval, battery capacity / nominal
+power, and the electricity pricing. Grouped into sections with a search box;
+percentages get a slider bound to a number box; values are validated as you type
+against the same bounds the bridge enforces. Only the fields you actually changed
+are submitted, a counter shows how many are pending, and navigating away with
+unsaved edits asks first. Changes apply **immediately** (no restart) and persist
+to `settings_file` (`/var/lib/ecoflow-nut/settings.json`), which is overlaid back
+onto the YAML at the next startup. Edits require the control token.
+
+The same page also holds browser-only preferences — theme (system/dark/light) and
+refresh rate — which are stored locally and never sent to the bridge.
+
+**Freshness.** The pill in the header distinguishes the two ways live data can
+stop: *live · Ns ago* when telemetry is current, amber *BLE stale* when the
+bridge is up but the device link has gone quiet, and *bridge unreachable* when
+the page cannot reach the bridge at all. Polling paces itself off the device's
+own `poll_interval_seconds` (override it under Settings), pauses entirely while
+the tab is in the background, and backs off when requests fail. Click the pill —
+or press `r` — to refresh immediately.
+
+**Auth.** Control actions (port toggles, auto-shutdown, settings) require
+`auth_token` — sent as an `X-Auth-Token` header, `Authorization: Bearer`, or
+`?token=`. The 🔑 button in the header opens a dialog that validates the token
+against `GET /api/auth/check` before storing it, so a typo says so immediately
+rather than failing on your next action; "Remember on this device" is optional,
+and *Sign out* clears it. If no token is configured on the bridge the controls
+are disabled and only the read-only dashboard is served; set
+`require_auth_for_read: true` to also gate telemetry (the page and its assets
+stay reachable so the browser can still show the unlock prompt). The token can
+cut power, so keep the UI on a trusted network.
 
 #### Telemetry history
 
@@ -481,6 +514,28 @@ soc_percent, ac_input_watts, ac_output_watts, usb/usbc watts, input/output watts
 runtime_seconds, status` + discharge/charge estimates), so you can query either
 directly for your own dashboards (Grafana, etc.). Pick **one** — if both are
 enabled, Postgres wins.
+
+`GET /api/history` serves it back, either over an absolute window (what the
+chart's zoom and pan use) or the last N minutes:
+
+```bash
+# absolute window, at most 500 buckets
+curl 'http://bridge:8080/api/history?since=1735689600&until=1735776000&max_points=500'
+# or relative, unchanged from before
+curl 'http://bridge:8080/api/history?minutes=1440'
+```
+
+`since`/`until` are epoch seconds and the window is half-open, `[since, until)`.
+The response echoes `since`, `until` and the `bucket_seconds` actually used.
+Spans are capped at 30 days and `max_points` at 2000 so a client can't ask a Pi
+to scan its whole table; an empty or future window is a normal empty result, not
+an error. `GET /api/energy` takes the same window. Buckets are anchored to the
+Unix epoch rather than to the window start, so a given bucket covers the same
+interval regardless of how you asked for it.
+
+If you put the UI behind a reverse proxy on a sub-path, proxy `/static/` too —
+the page resolves its assets relative to itself, so a sub-path mount works, but
+only if those requests reach the bridge.
 
 **Option A — SQLite (local, self-contained, recommended for a Pi).** A single
 file on the bridge host, no server and **no extra Python dependency** (stdlib
