@@ -89,8 +89,11 @@ async function tick() {
     if (needs.has("state")) stateStore.set(await api("api/state"));
     if (needs.has("auto")) autoStore.set(await api("api/autoshutdown"));
     healthStore.set({ ok: true, reason: "" });
+    document.body.classList.remove("booting");
     backoff = 1;
   } catch (err) {
+    // A failed first load should show the real state (dashes), not shimmer.
+    document.body.classList.remove("booting");
     healthStore.set({ ok: false, reason: err.reason || err.message });
     backoff = Math.min(backoff * 1.6, MAX_BACKOFF_MS / baseInterval());
   } finally {
@@ -245,7 +248,11 @@ function wireGlobals() {
 
   document.addEventListener("keydown", e => {
     if (e.target.matches("input, select, textarea")) return;
-    if (e.key === "r") schedule(0);
+    if (e.key === "r") { schedule(0); return; }
+    // 1-5 pick a range preset while the History view is showing.
+    if (currentName === "history" && /^[1-5]$/.test(e.key)) {
+      els(".range button")[Number(e.key) - 1]?.click();
+    }
   });
 }
 

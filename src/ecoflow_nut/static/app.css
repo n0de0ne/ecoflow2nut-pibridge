@@ -298,6 +298,34 @@ h2 {
   transition: width .4s var(--ease);
 }
 
+/* First paint only: shimmer where the numbers will land, so the page never
+   shows a row of em-dashes. Refreshes update in place and must not flash. */
+.booting .metric .value > span,
+.booting .pstat,
+.booting #asState {
+  color: transparent;
+  background: linear-gradient(90deg, var(--surface-2), var(--border), var(--surface-2));
+  background-size: 200% 100%;
+  border-radius: 5px;
+  /* Sized to the eventual value, not to the "–" placeholder glyph, so the
+     skeleton reads as a bar rather than a sliver. */
+  display: inline-block;
+  min-width: 3.5ch;
+}
+.booting .pstat { min-width: 6ch; }
+.booting #asState { min-width: 9ch; }
+@media (prefers-reduced-motion: no-preference) {
+  .booting .metric .value > span,
+  .booting .pstat,
+  .booting #asState { animation: shimmer 1.3s linear infinite; }
+  @keyframes shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+  }
+}
+.booting .metric .value .unit { color: transparent; background: none; }
+.booting .led { visibility: hidden; }
+
 .muted { color: var(--text-dim); font-size: .85rem; margin: .5rem 0 0; }
 .hint { font-size: .78rem; }
 .link { color: var(--accent); text-decoration: none; font-size: .85rem; }

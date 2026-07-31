@@ -6,8 +6,8 @@
 
 import {
   api, applyTheme, autoStore, el, els, escapeHtml, fmtMinutes, fmtMoney,
-  fmtRuntime, getRefresh, getTheme, setRefresh, settingsStore, stateStore,
-  toast,
+  fmtRuntime, getRefresh, getTheme, getToken, setRefresh, settingsStore,
+  stateStore, toast,
 } from "./core.js";
 import { createChart, formatBucket } from "./chart.js";
 
@@ -99,7 +99,9 @@ function renderAuto(a) {
 export function applyControlLock() {
   const s = stateStore.get() || {};
   const controlEnabled = s.control_enabled === true;
-  const hasToken = !!localStorage.getItem("ecoflow_token");
+  // getToken(), not localStorage: a token entered without "remember" lives only
+  // in memory, and reading storage directly would leave the UI locked.
+  const hasToken = !!getToken();
   const locked = !controlEnabled || !hasToken;
   for (const b of els("[data-out], #asOn, #asOff, #sbPress")) b.disabled = locked;
   const saveBtn = el("#saveSettings");
@@ -557,7 +559,7 @@ export const settings = {
     bar.hidden = changed.length === 0;
     el("#saveBarText").textContent =
       `${changed.length} unsaved change${changed.length === 1 ? "" : "s"}`;
-    el("#saveSettings").disabled = this.hasErrors() || !localStorage.getItem("ecoflow_token");
+    el("#saveSettings").disabled = this.hasErrors() || !getToken();
   },
 
   revert() {
