@@ -100,6 +100,25 @@ class AutoShutdownConfig:
     # single load (e.g. an Unraid server) be shed independently of the DELTA 3's
     # all-or-nothing AC bank, keeping other AC sockets (router/fibre) powered.
     cut_eve: bool = False
+    # Before cutting the Eve outlet, connect and read its OWN power draw, and
+    # only cut once it reports at/below this many watts -- i.e. the load really
+    # has finished shutting down. The low-load trigger infers that from the
+    # DELTA 3's *total* AC draw, which is a proxy that can fire while the load is
+    # still writing to disk; this confirms it at the outlet itself.
+    #
+    # None disables the check (cut immediately, the historical behaviour). The
+    # outlet must expose Eve's instantaneous-watts characteristic -- verify with
+    # 'ecoflow-nut eve status --all' before enabling.
+    eve_confirm_idle_watts: float | None = None
+    eve_confirm_poll_seconds: float = 15.0
+    # Consecutive idle readings required, so a momentary dip mid-shutdown does
+    # not look like "finished".
+    eve_confirm_samples: int = 2
+    # Give up waiting and cut anyway after this long. None waits indefinitely:
+    # safest for the load, but if the outlet is unreachable nothing is ever shed
+    # and the battery drains to zero (at which point the load loses power
+    # uncleanly regardless). Set a value to bound that.
+    eve_confirm_timeout_seconds: int | None = None
     restore_on_recovery: bool = False
 
 

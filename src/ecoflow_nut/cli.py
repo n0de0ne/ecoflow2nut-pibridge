@@ -244,16 +244,51 @@ def eve_off(ctx: click.Context) -> None:
 
 
 @eve.command("status")
+@click.option(
+    "--all",
+    "show_all",
+    is_flag=True,
+    help="Dump every characteristic the accessory exposes (diagnostic).",
+)
 @click.pass_context
-def eve_status(ctx: click.Context) -> None:
-    """Read the outlet's current on/off state."""
+def eve_status(ctx: click.Context, show_all: bool) -> None:
+    """Read the outlet's current on/off state (and power, when it meters).
+
+    With --all, list every characteristic the paired accessory exposes. That is
+    how you find out whether a given unit reports power at all: look for a
+    readable ("pr") entry of type e863f10d-... -- Eve's instantaneous watts.
+    Auto-shutdown's Eve confirmation needs that characteristic to exist.
+    """
     config = load_config(ctx.obj["config_path"])
     configure_logging(config.logging.level, config.logging.format)
+    outlet = eve_outlet.EveOutlet(config.eve)
     try:
-        value = asyncio.run(eve_outlet.EveOutlet(config.eve).status())
+        if show_all:
+            rows = asyncio.run(outlet.characteristics())
+        else:
+            reading = asyncio.run(outlet.read())
     except eve_outlet.EveError as exc:
         raise click.ClickException(str(exc)) from exc
-    click.echo("unknown" if value is None else ("on" if value else "off"))
+
+    if not show_all:
+        state = "unknown" if reading.on is None else ("on" if reading.on else "off")
+        if reading.watts is None:
+            click.echo(f"{state} (this outlet does not report power)")
+        else:
+            click.echo(f"{state}, {reading.watts:.1f} W")
+        return
+
+    click.echo(f"{'AID':>4} {'IID':>5}  {'PERMS':<10} {'TYPE':<36} VALUE")
+    for row in rows:
+        perms = ",".join(row.get("perms") or [])
+        value = row.get("value", "")
+        unit = row.get("unit") or ""
+        label = row.get("description") or ""
+        click.echo(
+            f"{row['aid']:>4} {row['iid']:>5}  {perms:<10} "
+            f"{str(row.get('type', '')):<36} {value}{unit}"
+            + (f"   ({label})" if label else "")
+        )
 
 
 @cli.group()

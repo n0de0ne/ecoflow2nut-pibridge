@@ -81,6 +81,14 @@ function renderAuto(a) {
   if (!a) return;
   let kind, text;
   if (!a.enabled) { kind = "off"; text = "Disabled"; }
+  // Checked before `triggered`: the state machine latches that before any I/O,
+  // so while we hold for the outlet to go idle nothing has actually been cut.
+  else if (a.awaiting_eve_idle) {
+    kind = "warn";
+    text = a.eve_watts == null
+      ? "Waiting · outlet unreadable, holding cut"
+      : `Waiting for load to drop · ${Math.round(a.eve_watts)} W`;
+  }
   else if (a.triggered) { kind = "crit"; text = "CUT sent"; }
   else if (a.armed) {
     kind = "warn";
@@ -354,6 +362,8 @@ export const energy = {
 // ---------------------------------------------------------------------- //
 
 const TIME_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
+// Field types where an empty box means "off" rather than an invalid number.
+const NULLABLE = new Set(["float_or_null", "int_or_null"]);
 const fieldId = key => "set_" + key.replace(/[^a-z0-9]/gi, "_");
 const isPercent = f => f.type === "int" && f.min === 0 && f.max === 100;
 
@@ -367,7 +377,7 @@ function validate(field, value) {
   if (field.type === "time") {
     return TIME_RE.test(value ?? "") ? null : "expected HH:MM (00:00-23:59)";
   }
-  if (field.type === "float_or_null" && (value === null || value === "")) return null;
+  if (NULLABLE.has(field.type) && (value === null || value === "")) return null;
   if (value === "" || value === null || Number.isNaN(Number(value))) {
     return "expected a number";
   }
@@ -481,7 +491,7 @@ export const settings = {
         f.min != null ? `min="${f.min}"` : "",
         f.max != null ? `max="${f.max}"` : "",
       ].join(" ");
-      const placeholder = f.type === "float_or_null" ? ' placeholder="off"' : "";
+      const placeholder = NULLABLE.has(f.type) ? ' placeholder="off"' : "";
       input = `<input type="number" id="${id}" data-key="${f.key}" data-type="${f.type}"
         ${attrs}${placeholder} value="${value ?? ""}">`;
     }
@@ -508,7 +518,7 @@ export const settings = {
     if (e.target.type === "checkbox") value = e.target.checked;
     else if (e.target.type === "number") {
       value = e.target.value === ""
-        ? (field.type === "float_or_null" ? null : "")
+        ? (NULLABLE.has(field.type) ? null : "")
         : Number(e.target.value);
     } else value = e.target.value;
     if (isPercent(field)) {

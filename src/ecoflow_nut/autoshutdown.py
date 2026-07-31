@@ -37,6 +37,49 @@ class ShutdownAction(Enum):
     RESTORE = "restore"
 
 
+class EveIdleConfirmer:
+    """Decides when a metered outlet's load has really finished shutting down.
+
+    The low-load trigger infers "the server is down" from the DELTA 3's *total*
+    AC draw, which is a proxy: it can fire while the load is still writing to
+    disk. When the outlet meters its own consumption we can confirm at the
+    source instead. This holds the policy -- threshold, debounce, deadline -- so
+    it stays testable; the daemon owns the BLE reads that feed it.
+
+    A reading of ``None`` (the outlet could not be read) never counts as idle and
+    resets the debounce: absence of evidence is not evidence of idleness.
+    """
+
+    def __init__(self, config: AutoShutdownConfig, started_at: float) -> None:
+        self._config = config
+        self._started_at = started_at
+        self._consecutive = 0
+        self.last_watts: float | None = None
+
+    @property
+    def consecutive(self) -> int:
+        return self._consecutive
+
+    def observe(self, watts: float | None) -> bool:
+        """Feed one reading. True once enough consecutive idle samples have run."""
+        self.last_watts = watts
+        threshold = self._config.eve_confirm_idle_watts
+        if threshold is None:
+            return True
+        if watts is None or watts > threshold:
+            self._consecutive = 0
+            return False
+        self._consecutive += 1
+        return self._consecutive >= max(1, self._config.eve_confirm_samples)
+
+    def expired(self, now: float) -> bool:
+        """True once the optional deadline has passed and we should cut anyway."""
+        timeout = self._config.eve_confirm_timeout_seconds
+        if timeout is None:
+            return False
+        return now - self._started_at >= timeout
+
+
 class AutoShutdownController:
     """Decides shutdown actions from successive telemetry observations."""
 

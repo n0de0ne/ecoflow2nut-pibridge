@@ -136,6 +136,21 @@ auto_shutdown:
   cut_usb: false                 # KEEP false if the bridge host is USB-powered
   cut_dc: false                  # turn off 12V DC output
   cut_eve: false                 # also cut the downstream HomeKit outlet (see 'eve')
+  # Before cutting the Eve outlet, read the outlet's OWN power draw and wait
+  # until it is really idle -- i.e. the server has finished shutting down rather
+  # than merely looking quiet on the DELTA 3's total AC draw. Needs an Eve that
+  # reports watts: check with 'ecoflow-nut eve status --all' (look for a readable
+  # e863f10d-... characteristic) and read the real running/idle figures there, so
+  # you can set this between them. A powered-down server's PSU standby is
+  # typically 1-3 W. null = off (cut immediately).
+  eve_confirm_idle_watts: null   # e.g. 5
+  eve_confirm_poll_seconds: 15   # seconds between readings while waiting
+  eve_confirm_samples: 2         # consecutive idle readings needed
+  # null = wait indefinitely rather than cut a load that is still drawing. Safest
+  # for the server, but if the outlet is unreachable nothing is ever shed and the
+  # battery drains to 0 (where the server loses power uncleanly anyway). Set a
+  # number of seconds to cut regardless after that long.
+  eve_confirm_timeout_seconds: null
   restore_on_recovery: false     # turn outputs back on when power/SoC recovers
 
 # Optional downstream HomeKit-over-BLE outlet (e.g. an Eve Energy, BLE/non-Thread).

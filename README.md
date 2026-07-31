@@ -186,6 +186,7 @@ Full annotated example: [`config/config.example.yaml`](config/config.example.yam
 | `auto_shutdown.load_grace_seconds` | `60` | Debounce for the low-load trigger |
 | `auto_shutdown.cut_ac` / `cut_usb` / `cut_dc` | `true`/`false`/`false` | Which DELTA 3 outputs to cut |
 | `auto_shutdown.cut_eve` | `false` | Also cut a downstream HomeKit-over-BLE outlet (see [Per-load shedding](#per-load-shedding-with-a-homekit-outlet)) |
+| `auto_shutdown.eve_confirm_idle_watts` | `null` | Read the Eve's own draw and only cut once it is at/below this. `null` cuts immediately (see [Confirming at the outlet](#confirming-at-the-outlet-before-cutting)) |
 | `auto_shutdown.restore_on_recovery` | `false` | Re-enable cut outputs when power/SoC recovers |
 | `eve.enabled` | `false` | Master switch for the HomeKit-over-BLE outlet |
 | `eve.device_id` | `""` | HomeKit accessory id (from `eve discover`) |
@@ -269,6 +270,61 @@ Pick `min_load_watts` so it sits between your network-only draw and your
 network-plus-idle-server draw (e.g. fibre+switch ≈ 15 W, +idle Unraid ≈ 75 W →
 `30` works). The threshold is what distinguishes "server still running" from
 "server has finished shutting down".
+
+#### Confirming at the outlet before cutting
+
+That total-AC threshold is a *proxy*. It has to be tuned between two loads, it
+breaks if you plug something else into the bank, and it can fire while the server
+is still writing to its array — at which point the bridge pulls the plug on a
+half-finished shutdown.
+
+If your Eve reports power (most metering Eve Energy units do), the bridge can ask
+the outlet directly instead of inferring. When a trigger fires it connects, reads
+the outlet's **own** draw, and only sends the off command once that draw is
+genuinely idle:
+
+```yaml
+auto_shutdown:
+  eve_confirm_idle_watts: 5      # cut only once the outlet reports <= 5 W
+  eve_confirm_poll_seconds: 15
+  eve_confirm_samples: 2         # two consecutive idle readings, so a dip
+                                 # mid-shutdown isn't mistaken for "finished"
+  eve_confirm_timeout_seconds: null
+```
+
+**Check your hardware first.** The watt reading uses Eve's vendor characteristic,
+and not every SKU exposes it over BLE:
+
+```bash
+ecoflow-nut --config config.yaml eve status --all
+```
+
+Look for a readable (`pr`) entry of type `e863f10d-…`. Run it with the server up
+and again with it off — those two numbers are exactly what to set
+`eve_confirm_idle_watts` between (a powered-down PSU typically idles at 1–3 W).
+Leave the setting blank and nothing changes: the outlet is cut immediately, as
+before.
+
+While waiting, the dashboard's auto-shutdown badge reads *Waiting for load to
+drop · N W* rather than *CUT sent*, so you can see what it is actually doing. The
+Eve **Off** button always overrides and cuts immediately.
+
+> **It waits indefinitely by default.** `eve_confirm_timeout_seconds: null` means
+> the outlet is never cut without a confirmed idle reading — the safest thing for
+> the server, and the reason this feature exists. The cost: if the outlet becomes
+> unreachable, or the server hangs still drawing power, nothing is ever shed and
+> the battery drains to empty, where the server loses power uncleanly anyway. Set
+> a number of seconds to bound that.
+
+> **Give the outlet its own radio.** Confirmation holds one BLE connection open
+> for the whole wait (far cheaper than reconnecting per sample, but continuous
+> rather than one brief blip). On a shared `hci0` that contends with the DELTA 3
+> link the entire time, so a separate dongle (`eve.adapter: hci1`) goes from
+> recommended to strongly advised once this is on.
+
+When confirmation is enabled the Eve is cut **before** the EcoFlow outputs, not
+after — cutting the AC bank first would kill the outlet, and the server behind it,
+before the confirmation could mean anything.
 
 #### Setup (one-time)
 
@@ -384,6 +440,7 @@ ecoflow-nut --config config.yaml eve discover   # list pairable HomeKit accessor
 ecoflow-nut --config config.yaml eve scan       # raw scan: device_id + paired flag
 ecoflow-nut --config config.yaml eve pair       # pair (needs device_id + setup_code)
 ecoflow-nut --config config.yaml eve on         # toggle outlet (also: off / status)
+ecoflow-nut --config config.yaml eve status --all   # dump every characteristic
 ```
 
 Unlike `ac`/`usb`/`dc`, the `eve` commands connect to the outlet directly (its

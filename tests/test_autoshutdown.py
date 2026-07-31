@@ -2,7 +2,11 @@
 
 import pytest
 
-from ecoflow_nut.autoshutdown import AutoShutdownController, ShutdownAction
+from ecoflow_nut.autoshutdown import (
+    AutoShutdownController,
+    EveIdleConfirmer,
+    ShutdownAction,
+)
 from ecoflow_nut.config import AutoShutdownConfig
 
 
@@ -34,6 +38,61 @@ def test_does_not_arm_on_ac():
     # Even at low SoC, do nothing while on line power.
     assert c.evaluate(0, 5, on_battery=False) is ShutdownAction.NONE
     assert c.armed is False
+
+
+def _confirm_cfg(**kw) -> AutoShutdownConfig:
+    base = dict(
+        enabled=True,
+        cut_eve=True,
+        eve_confirm_idle_watts=5.0,
+        eve_confirm_samples=2,
+    )
+    base.update(kw)
+    return _cfg(**base)
+
+
+def test_confirmer_needs_consecutive_idle_readings():
+    c = EveIdleConfirmer(_confirm_cfg(), started_at=0)
+    assert c.observe(120.0) is False  # server still running
+    assert c.observe(3.0) is False  # one idle sample is not enough
+    assert c.observe(2.0) is True  # two in a row -- it has powered down
+
+
+def test_confirmer_resets_on_a_mid_sequence_spike():
+    """A dip during shutdown must not be mistaken for having finished."""
+    c = EveIdleConfirmer(_confirm_cfg(eve_confirm_samples=3), started_at=0)
+    assert c.observe(1.0) is False
+    assert c.observe(1.0) is False
+    assert c.observe(90.0) is False  # back to drawing -- start over
+    assert c.consecutive == 0
+    assert c.observe(1.0) is False
+    assert c.observe(1.0) is False
+    assert c.observe(1.0) is True
+
+
+def test_confirmer_treats_an_unreadable_outlet_as_not_idle():
+    """Absence of evidence is not evidence of idleness."""
+    c = EveIdleConfirmer(_confirm_cfg(), started_at=0)
+    assert c.observe(1.0) is False
+    assert c.observe(None) is False  # failed read
+    assert c.consecutive == 0
+    assert c.observe(1.0) is False  # must start the run again
+
+
+def test_confirmer_without_a_threshold_is_a_no_op():
+    c = EveIdleConfirmer(_confirm_cfg(eve_confirm_idle_watts=None), started_at=0)
+    assert c.observe(500.0) is True
+
+
+def test_confirmer_waits_forever_without_a_timeout():
+    c = EveIdleConfirmer(_confirm_cfg(), started_at=0)
+    assert c.expired(10**9) is False
+
+
+def test_confirmer_expires_when_a_timeout_is_set():
+    c = EveIdleConfirmer(_confirm_cfg(eve_confirm_timeout_seconds=300), started_at=100)
+    assert c.expired(399) is False
+    assert c.expired(400) is True
 
 
 def test_arms_then_cuts_after_grace():

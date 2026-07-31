@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import signal
@@ -15,7 +16,7 @@ import structlog
 # ``db`` is safe to import eagerly: asyncpg is only referenced under TYPE_CHECKING,
 # so this pulls in the shared bucket arithmetic without the optional dependency.
 from . import db, delta3, pricing, settings_store
-from .autoshutdown import AutoShutdownController, ShutdownAction
+from .autoshutdown import AutoShutdownController, EveIdleConfirmer, ShutdownAction
 from .ble_client import EcoFlowBLE
 from .config import Config, load_config
 from .delta3 import DeviceState
@@ -103,6 +104,10 @@ class Daemon:
         # Last on/off state we commanded the Eve outlet into (the outlet is not
         # polled to avoid extra BLE traffic; None == unknown until first command).
         self._eve_state: bool | None = None
+        # Set while a cut is holding for the Eve's load to go idle, so the UI can
+        # say so rather than claiming "CUT sent" when nothing has been cut yet.
+        self._eve_confirm: EveIdleConfirmer | None = None
+        self._eve_confirm_task: asyncio.Task[None] | None = None
         # Optional SwitchBot Bot (manual server power-button presser).
         self._switchbot: SwitchBot | None = (
             SwitchBot(config.switchbot) if config.switchbot.enabled else None
@@ -369,6 +374,14 @@ class Daemon:
             "recover_soc_percent": cfg.recover_soc_percent,
             "grace_period_seconds": cfg.grace_period_seconds,
             "cut_outputs": self._cut_outputs(),
+            # The controller latches `triggered` before any I/O, so while we are
+            # holding for the outlet to go idle it already reads as cut. Say what
+            # is actually happening instead.
+            "awaiting_eve_idle": self._eve_confirm is not None,
+            "eve_watts": (
+                self._eve_confirm.last_watts if self._eve_confirm is not None else None
+            ),
+            "eve_confirm_idle_watts": cfg.eve_confirm_idle_watts,
         }
 
     async def control_output(self, kind: str, enabled: bool) -> str:
@@ -383,9 +396,15 @@ class Daemon:
         return f"{kind} {'on' if enabled else 'off'}"
 
     async def control_eve(self, enabled: bool) -> str:
-        """Toggle the downstream HomeKit outlet. Raises on failure."""
+        """Toggle the downstream HomeKit outlet. Raises on failure.
+
+        Cancels any auto-shutdown confirmation still waiting for the load to go
+        idle: an explicit command from the CLI or the dashboard is the operator
+        overruling the wait, and it must not queue behind it on the BLE lock.
+        """
         if self._eve is None:
             raise RuntimeError("eve outlet is not enabled")
+        await self._cancel_eve_confirm()
         await self._eve.set(enabled)
         self._eve_state = enabled
         log.info("control.eve", enabled=enabled)
@@ -573,23 +592,128 @@ class Daemon:
         if packets and client is None:
             log.error("auto_shutdown.no_client", note="cannot send EcoFlow command")
 
-        async def _send() -> None:
-            if client is not None:
-                for packet in packets:
-                    try:
-                        await client.send_command_packet(packet)
-                    except Exception as exc:  # noqa: BLE001
-                        log.error("auto_shutdown.send_failed", error=str(exc))
-                    await asyncio.sleep(0.3)
+        cut_eve = cfg.cut_eve and self._eve is not None
+        # Only a cut waits: restoring power to an idle outlet needs no proof.
+        confirm_first = not enabled and cut_eve and cfg.eve_confirm_idle_watts is not None
+
+        async def _send_ecoflow() -> None:
+            if client is None:
+                return
+            for packet in packets:
+                try:
+                    await client.send_command_packet(packet)
+                except Exception as exc:  # noqa: BLE001
+                    log.error("auto_shutdown.send_failed", error=str(exc))
+                await asyncio.sleep(0.3)
+
+        async def _send_eve() -> None:
             # The HomeKit outlet is an independent cut target on its own radio,
             # so drive it regardless of the EcoFlow link state.
-            if cfg.cut_eve and self._eve is not None:
-                try:
-                    await self.control_eve(enabled)
-                except Exception as exc:  # noqa: BLE001
-                    log.error("auto_shutdown.eve_failed", error=str(exc))
+            try:
+                await self.control_eve(enabled)
+            except Exception as exc:  # noqa: BLE001
+                log.error("auto_shutdown.eve_failed", error=str(exc))
 
-        asyncio.create_task(_send())
+        async def _send() -> None:
+            if confirm_first:
+                # Cut the outlet FIRST when confirming. The Eve hangs off a
+                # DELTA 3 socket, so cutting the AC bank first would kill it --
+                # and the load behind it -- before the confirmation could mean
+                # anything.
+                await self._await_eve_idle()
+                await _send_eve()
+                await _send_ecoflow()
+                return
+            await _send_ecoflow()
+            if cut_eve:
+                await _send_eve()
+
+        # Retained: a confirmation wait can run for a long time, and a task with
+        # no live reference is garbage-collectable mid-flight.
+        task = asyncio.create_task(_send())
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        if confirm_first:
+            self._eve_confirm_task = task
+
+    async def _await_eve_idle(self) -> None:
+        """Hold until the Eve outlet's own draw shows the load has powered down.
+
+        Holds ONE connection for the whole wait: a cold call costs a scan, a BLE
+        connect, a pair-verify and a full GATT read, which would be seconds of
+        airtime per sample. On a read failure the session is dropped and reopened
+        on the next pass, so a flaky link recovers instead of aborting.
+
+        With no timeout configured this waits indefinitely -- deliberately, since
+        cutting a server that is still writing is the thing we are avoiding. The
+        dashboard's Eve Off button cancels this and cuts immediately, and
+        ``eve_confirm_timeout_seconds`` bounds it for the unattended case.
+        """
+        cfg = self._config.auto_shutdown
+        if self._eve is None or cfg.eve_confirm_idle_watts is None:
+            return
+        confirmer = EveIdleConfirmer(cfg, time.monotonic())
+        self._eve_confirm = confirmer
+        # Floored rather than allowed to be 0: a real BLE read takes longer than
+        # this anyway, so the floor only stops a misconfigured 0 spinning hot.
+        poll = max(0.05, float(cfg.eve_confirm_poll_seconds))
+        log.warning(
+            "auto_shutdown.eve_confirm_wait",
+            idle_watts=cfg.eve_confirm_idle_watts,
+            samples=cfg.eve_confirm_samples,
+            timeout=cfg.eve_confirm_timeout_seconds,
+        )
+        try:
+            while True:
+                try:
+                    async with self._eve.session() as eve:
+                        while True:
+                            reading = await eve.read()
+                            if confirmer.observe(reading.watts):
+                                log.critical(
+                                    "auto_shutdown.eve_confirmed_idle",
+                                    watts=reading.watts,
+                                )
+                                return
+                            if confirmer.expired(time.monotonic()):
+                                log.critical(
+                                    "auto_shutdown.eve_confirm_timeout",
+                                    watts=reading.watts,
+                                    note="cutting anyway",
+                                )
+                                return
+                            log.info(
+                                "auto_shutdown.eve_still_drawing",
+                                watts=reading.watts,
+                                consecutive_idle=confirmer.consecutive,
+                            )
+                            await asyncio.sleep(poll)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    # Unreadable is not idle: keep holding, and retry the link.
+                    confirmer.observe(None)
+                    log.error("auto_shutdown.eve_confirm_read_failed", error=str(exc))
+                    if confirmer.expired(time.monotonic()):
+                        log.critical(
+                            "auto_shutdown.eve_confirm_timeout",
+                            note="outlet unreadable; cutting anyway",
+                        )
+                        return
+                    await asyncio.sleep(poll)
+        finally:
+            self._eve_confirm = None
+
+    async def _cancel_eve_confirm(self) -> None:
+        """Stop any in-flight confirmation so a manual command takes over."""
+        task = self._eve_confirm_task
+        self._eve_confirm_task = None
+        if task is None or task.done():
+            return
+        log.warning("auto_shutdown.eve_confirm_cancelled", reason="manual override")
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
     async def _prune_loop(self) -> None:
         """Apply the store's retention window at startup, then periodically.

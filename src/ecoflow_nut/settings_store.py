@@ -49,7 +49,7 @@ class Field:
     def step(self) -> float | None:
         if self.type == "float" or self.type == "float_or_null":
             return 0.01
-        if self.type == "int":
+        if self.type == "int" or self.type == "int_or_null":
             return 1
         return None
 
@@ -141,6 +141,30 @@ FIELDS: tuple[Field, ...] = (
         "bool",
         "Restore on recovery",
         "Auto-shutdown",
+    ),
+    Field(
+        "auto_shutdown.eve_confirm_idle_watts",
+        ("auto_shutdown", "eve_confirm_idle_watts"),
+        "float_or_null",
+        "Eve idle confirm (W)",
+        "Auto-shutdown",
+        0,
+        5000,
+        "Before cutting the Eve outlet, wait until the outlet's own draw is "
+        "at/below this -- proof the load finished shutting down. Blank = cut "
+        "immediately. Needs an Eve that reports watts ('eve status --all').",
+    ),
+    Field(
+        "auto_shutdown.eve_confirm_timeout_seconds",
+        ("auto_shutdown", "eve_confirm_timeout_seconds"),
+        "int_or_null",
+        "Eve confirm timeout (s)",
+        "Auto-shutdown",
+        0,
+        86400,
+        "Cut anyway after this long. Blank waits indefinitely: safest for the "
+        "load, but an unreachable outlet then never gets shed and the battery "
+        "drains to empty.",
     ),
     # --- NUT thresholds ---
     Field(
@@ -372,6 +396,10 @@ def _coerce(field: Field, value: Any) -> Any:
         if value is None or value == "":
             return None
         return _coerce_number(field, value, integer=False)
+    if t == "int_or_null":
+        if value is None or value == "":
+            return None
+        return _coerce_number(field, value, integer=True)
     if t == "int":
         return _coerce_number(field, value, integer=True)
     if t == "float":

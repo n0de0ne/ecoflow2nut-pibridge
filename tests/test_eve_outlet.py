@@ -14,7 +14,14 @@ import pytest
 
 from ecoflow_nut import eve_outlet
 from ecoflow_nut.config import EveOutletConfig, load_config
-from ecoflow_nut.eve_outlet import EveError, EveOutlet, _is_on_char
+from ecoflow_nut.eve_outlet import (
+    _ON_TYPES,
+    _WATT_TYPES,
+    EveError,
+    EveOutlet,
+    _find_char,
+    _norm_char_type,
+)
 
 _BASE = """
 ecoflow:
@@ -61,13 +68,26 @@ auto_shutdown:
 
 
 @pytest.mark.parametrize("value", ["25", "00000025-0000-1000-8000-0026BB765291"])
-def test_is_on_char_matches(value: str) -> None:
-    assert _is_on_char(value) is True
+def test_on_type_matches(value: str) -> None:
+    assert _norm_char_type(value) in _ON_TYPES
 
 
 @pytest.mark.parametrize("value", ["26", "name", ""])
-def test_is_on_char_rejects(value: str) -> None:
-    assert _is_on_char(value) is False
+def test_on_type_rejects(value: str) -> None:
+    assert _norm_char_type(value) not in _ON_TYPES
+
+
+def test_watt_type_matches_eve_vendor_uuid() -> None:
+    assert _norm_char_type("E863F10D-079E-48FF-8F27-9C2605A29F52") in _WATT_TYPES
+
+
+def test_find_char_returns_none_when_absent() -> None:
+    """A non-metering outlet must read as "no watts", not raise."""
+    accessories = [
+        {"aid": 1, "services": [{"characteristics": [{"type": "25", "iid": 9}]}]}
+    ]
+    assert _find_char(accessories, _ON_TYPES) == (1, 9)
+    assert _find_char(accessories, _WATT_TYPES) is None
 
 
 # --- control via a fake aiohomekit controller ----------------------------- #
@@ -108,14 +128,21 @@ class _FakeController:
         return self._pairing
 
 
-def _patch_connected(monkeypatch, controller) -> None:
-    """Bypass the real bleak scan + seed; hand back a fake started controller."""
+def _patch_connected(monkeypatch, controller) -> list[tuple]:
+    """Bypass the real bleak scan + seed; hand back a fake started controller.
+
+    Returns the list of connect calls, so tests can assert how many cold
+    connections a sequence of operations actually cost.
+    """
+    calls: list[tuple] = []
 
     async def _conn(adapter, device_id, timeout):
+        calls.append((adapter, device_id, timeout))
         controller.started = True
         return controller
 
     monkeypatch.setattr(eve_outlet, "_connected_controller", _conn)
+    return calls
 
 
 def _outlet_accessories() -> list[dict]:
@@ -178,7 +205,101 @@ def test_set_caches_aid_iid(monkeypatch, paired: EveOutletConfig) -> None:
 
     outlet = EveOutlet(paired)
     asyncio.run(outlet.set(False))
-    assert outlet._on_aid_iid == (1, 9)
+    # One walk resolves every characteristic we know about, so a later watts
+    # read costs no extra traversal -- and a cached None is remembered, so an
+    # outlet without metering is not re-searched on every poll.
+    assert outlet._char_cache["on"] == (1, 9)
+    assert outlet._char_cache["watts"] is None
+
+
+def _metering_accessories() -> list[dict]:
+    """An Eve Energy: the On switch plus the vendor instantaneous-watts char."""
+    return [
+        {
+            "aid": 1,
+            "services": [
+                {
+                    "characteristics": [
+                        {"iid": 8, "type": "23", "perms": ["pr"]},  # Name
+                        {"iid": 9, "type": "25", "perms": ["pr", "pw"]},  # On
+                        {
+                            "iid": 21,
+                            "type": "E863F10D-079E-48FF-8F27-9C2605A29F52",
+                            "perms": ["pr"],
+                            "unit": "W",
+                        },
+                    ]
+                }
+            ],
+        }
+    ]
+
+
+def test_read_returns_watts_when_the_outlet_meters(
+    monkeypatch, paired: EveOutletConfig
+) -> None:
+    pairing = _FakePairing(_metering_accessories())
+    pairing.values = {(1, 9): {"value": True}, (1, 21): {"value": 84.5}}
+    _patch_connected(monkeypatch, _FakeController(pairing))
+    import asyncio
+
+    reading = asyncio.run(EveOutlet(paired).read())
+    assert reading.on is True
+    assert reading.watts == pytest.approx(84.5)
+
+
+def test_read_without_metering_reports_none_watts(
+    monkeypatch, paired: EveOutletConfig
+) -> None:
+    """A plain outlet still reports on/off; watts is simply unavailable."""
+    pairing = _FakePairing(_outlet_accessories())
+    pairing.values = {(1, 9): {"value": False}}
+    _patch_connected(monkeypatch, _FakeController(pairing))
+    import asyncio
+
+    reading = asyncio.run(EveOutlet(paired).read())
+    assert reading.on is False
+    assert reading.watts is None
+
+
+def test_session_reads_repeatedly_on_one_connection(
+    monkeypatch, paired: EveOutletConfig
+) -> None:
+    """The whole point of session(): sample without paying a cold connect each time."""
+    pairing = _FakePairing(_metering_accessories())
+    controller = _FakeController(pairing)
+    calls = _patch_connected(monkeypatch, controller)
+    import asyncio
+
+    async def _drive() -> list[float | None]:
+        readings = []
+        async with EveOutlet(paired).session() as eve:
+            for watts in (120.0, 60.0, 1.2):
+                pairing.values = {(1, 9): {"value": True}, (1, 21): {"value": watts}}
+                readings.append((await eve.read()).watts)
+            await eve.set(False)
+        return readings
+
+    assert asyncio.run(_drive()) == [120.0, 60.0, 1.2]
+    assert len(calls) == 1, "expected a single connect for the whole session"
+    assert pairing.written == [(1, 9, False)]
+    assert controller.stopped is True
+
+
+def test_characteristics_dump_includes_values(
+    monkeypatch, paired: EveOutletConfig
+) -> None:
+    """The diagnostic must surface the type and value of every readable char."""
+    pairing = _FakePairing(_metering_accessories())
+    pairing.values = {(1, 8): {"value": "Eve"}, (1, 21): {"value": 42.0}}
+    _patch_connected(monkeypatch, _FakeController(pairing))
+    import asyncio
+
+    rows = asyncio.run(EveOutlet(paired).characteristics())
+    by_iid = {r["iid"]: r for r in rows}
+    assert by_iid[21]["type"].lower().startswith("e863f10d")
+    assert by_iid[21]["value"] == pytest.approx(42.0)
+    assert by_iid[8]["value"] == "Eve"
 
 
 def test_missing_pairing_file_raises(tmp_path: Path) -> None:
