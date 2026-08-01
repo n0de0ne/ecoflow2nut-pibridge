@@ -28,6 +28,17 @@ if [ ! -x "${APP_DIR}/.venv/bin/pip" ]; then
     exit 1
 fi
 
+# Report what is about to be installed. "I updated and nothing changed" is
+# almost always a checkout sitting on the wrong branch or an unpulled commit,
+# and that is invisible unless the script says so.
+COMMIT="$(git -C "${REPO_DIR}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+BRANCH="$(git -C "${REPO_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+echo "==> Installing from ${REPO_DIR}"
+echo "    branch ${BRANCH}, commit ${COMMIT}"
+if [ -n "$(git -C "${REPO_DIR}" status --porcelain 2>/dev/null)" ]; then
+    echo "    (working tree has uncommitted changes)"
+fi
+
 echo "==> Syncing source into ${APP_DIR}..."
 # Remove first: cp -r merges, so files deleted upstream would otherwise linger
 # in the copy and be packaged into the wheel.
@@ -35,6 +46,9 @@ rm -rf "${APP_DIR}/src"
 cp -r "${REPO_DIR}/src" "${REPO_DIR}/pyproject.toml" "${REPO_DIR}/README.md" "${APP_DIR}/"
 # Stale build metadata from the checkout would confuse the rebuild.
 rm -rf "${APP_DIR}"/src/*.egg-info
+# Record what went in, so `ecoflow-nut --version` can answer "which build is
+# actually running" rather than leaving you to grep site-packages.
+printf '%s\n' "${COMMIT}" > "${APP_DIR}/INSTALLED_COMMIT"
 
 echo "==> Reinstalling into the virtualenv..."
 # --force-reinstall because the version may not have changed between builds, and
@@ -59,6 +73,28 @@ missing = [
 if missing:
     sys.exit("    MISSING from the installed package: " + ", ".join(missing))
 print("    ok")
+PY
+
+# Prove the venv is actually running the code we just copied, not a stale build.
+# A pip that quietly skipped the reinstall looks identical to a successful one
+# until you go looking for a command that isn't there.
+echo "==> Verifying the installed code matches the checkout..."
+"${APP_DIR}/.venv/bin/python" - "${REPO_DIR}/src/ecoflow_nut/cli.py" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+import ecoflow_nut.cli as installed
+
+source = Path(sys.argv[1]).read_bytes()
+target = Path(installed.__file__).read_bytes()
+if hashlib.sha256(source).digest() != hashlib.sha256(target).digest():
+    sys.exit(
+        f"    MISMATCH: {installed.__file__}\n"
+        "    differs from the checkout -- the reinstall did not take. Check that\n"
+        "    the checkout is on the branch you expect and that pip succeeded."
+    )
+print(f"    ok ({installed.__file__})")
 PY
 
 chown -R ecoflow:nut "${APP_DIR}"
