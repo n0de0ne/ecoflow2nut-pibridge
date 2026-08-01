@@ -33,23 +33,26 @@ function setPort(id, kind, text, title) {
   node.title = title || "";
 }
 
+/** Each port reports a real flow flag; watts are shown alongside when drawing. */
+function portState(on, watts, awaiting) {
+  if (on == null) return ["unknown", "?", awaiting];
+  const w = Math.round(watts ?? 0);
+  if (!on) return ["off", "OFF", ""];
+  return ["on", w > 0 ? `ON · ${w}W` : "ON · idle", ""];
+}
+
 function renderPorts(s) {
-  // AC has a real on/off flag (flow_info_ac_out); USB/DC do not, so USB is
-  // inferred from power draw and DC has no telemetry at all.
-  const ac = s.ac_output_on;
-  setPort("stAc", ac === true ? "on" : ac === false ? "off" : "unknown",
-    ac === true ? "ON" : ac === false ? "OFF" : "?",
-    ac == null ? "Awaiting the AC-output flag from the device." : "");
+  // Every port has a decoded flow_info flag, so these are the device's own
+  // states, not inferences from power draw.
+  setPort("stAc", ...portState(s.ac_output_on, s.ac_output_watts,
+    "Awaiting the AC-output flag from the device."));
 
-  const usbW = Math.round((s.usb_output_watts ?? 0) + (s.usbc_output_watts ?? 0));
-  setPort("stUsb", usbW > 0 ? "on" : "unknown",
-    usbW > 0 ? `ON · ${usbW}W` : "— idle/off",
-    usbW > 0 ? "" : "Total across all four ports, inferred from draw: no USB " +
-      "enable flag has been identified in the protocol, so 0 W means off OR " +
-      "on-but-idle.");
+  const usbW = (s.usb_output_watts ?? 0) + (s.usbc_output_watts ?? 0);
+  setPort("stUsb", ...portState(s.usb_output_on, usbW,
+    "Awaiting the USB flow flag from the device."));
 
-  setPort("stDc", "unknown", "n/a",
-    "The DELTA 3 sends no 12V DC telemetry, so its on/off state is unknown.");
+  setPort("stDc", ...portState(s.dc_output_on, s.dc_output_watts,
+    "Awaiting the 12V DC flow flag from the device."));
 
   el("#eveCtl").hidden = s.eve_enabled !== true;
   if (s.eve_enabled === true) {

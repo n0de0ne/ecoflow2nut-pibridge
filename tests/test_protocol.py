@@ -189,6 +189,64 @@ def test_usb_totals_stay_none_until_a_port_reports():
     assert state.usbc_output_watts is None
 
 
+@pytest.mark.parametrize("value", [2, 3, 14, 15])
+def test_flow_is_on_accepts_active_masks(value):
+    assert delta3.flow_is_on(value) is True
+
+
+@pytest.mark.parametrize("value", [0, 4, 8, 12])
+def test_flow_is_on_rejects_inactive_masks(value):
+    """The whole point: bool() says True for 4, 8 and 12, and all three appear
+    on a real DELTA 3 for ports that are OFF."""
+    assert delta3.flow_is_on(value) is False
+    assert bool(value) is not delta3.flow_is_on(value) or value == 0
+
+
+def _flags_payload(**flags: int) -> bytes:
+    numbers = {
+        "usb_a1": delta3.F_FLOW_INFO_QCUSB1,
+        "usb_c2": delta3.F_FLOW_INFO_TYPEC2,
+        "ac_out": delta3.F_FLOW_INFO_AC_OUT,
+        "dc": delta3.F_FLOW_INFO_12V,
+    }
+    return encode_message(
+        [ProtoField(numbers[k], WIRE_VARINT, v) for k, v in flags.items()]
+    )
+
+
+def test_port_flags_decode_from_real_device_values():
+    """Values observed on a real DELTA 3: USB and AC active at 14, 12V off at 4."""
+    state = DeviceState()
+    state.merge_display_payload(_flags_payload(usb_a1=14, ac_out=14, dc=4))
+    assert state.usb_output_on is True
+    assert state.ac_output_on is True
+    assert state.dc_output_on is False
+
+
+def test_ac_output_off_is_not_read_as_on():
+    """Regression: ac_output_on used bool(), so an inactive 4 read as ON."""
+    state = DeviceState()
+    state.merge_display_payload(_flags_payload(ac_out=4))
+    assert state.ac_output_on is False
+
+
+def test_any_usb_port_flag_answers_for_the_master_switch():
+    """One switch drives all four ports, and frames are partial -- whichever
+    port's flag arrives has to be enough."""
+    state = DeviceState()
+    state.merge_display_payload(_flags_payload(usb_c2=14))
+    assert state.usb_output_on is True
+    state.merge_display_payload(_flags_payload(usb_a1=4))
+    assert state.usb_output_on is False
+
+
+def test_port_flags_stay_none_until_reported():
+    state = DeviceState()
+    state.merge_display_payload(encode_message([]))
+    assert state.usb_output_on is None
+    assert state.dc_output_on is None
+
+
 def test_field_names_cover_every_decoded_constant():
     """The diagnostic labels known fields; a new constant must not go unlabelled."""
     constants = {

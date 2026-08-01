@@ -501,12 +501,11 @@ DC**, plus the auto-shutdown state and a live enable/disable. When the
 **Eve outlet** control appears (showing its last commanded on/off state), and a
 [SwitchBot](#server-power-button-switchbot) **Press** button if that's enabled.
 
-A coloured LED sits next to each control. **AC** shows a true ON/OFF from the
-device's decoded flag (`flow_info_ac_out`). **USB** sums all four ports (two
-USB-A, two USB-C) and is inferred from that draw, since no USB enable flag has
-been identified in the protocol yet, so it reads `ON · NW` when drawing and
-`— idle/off` otherwise — 0 W is ambiguous, noted in its tooltip. **12V DC** shows
-`n/a` (the device sends no DC telemetry). The **auto-shutdown** badge is grey
+A coloured LED sits next to each control, each showing a true ON/OFF read from
+the device's own `flow_info_*` flag — **AC**, **USB** and **12V DC** alike. A
+port that is on but idle reads `ON · idle`; one that is drawing shows its watts,
+with USB summing all four ports (two USB-A, two USB-C). The **auto-shutdown**
+badge is grey
 *Disabled*, green *Monitoring*, pulsing amber *ARMED · cutting in Ns*, or pulsing
 red *CUT sent*. Turning the USB output off pops a confirmation, since the bridge
 host is often powered from the DELTA 3's USB port.

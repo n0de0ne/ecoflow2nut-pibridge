@@ -30,6 +30,15 @@ F_POW_GET_QCUSB1 = 9  # USB-A port 1 watts (float)
 F_POW_GET_QCUSB2 = 10  # USB-A port 2 watts (float)
 F_POW_GET_TYPEC1 = 11  # USB-C port 1 watts (float)
 F_POW_GET_TYPEC2 = 12  # USB-C port 2 watts (float)
+# Per-port flow state. NOT booleans -- see flow_is_on(). The DELTA 3's USB is a
+# single master switch (cfg_usb_open), so all four USB ports report the same
+# state; any of them answers "is USB on".
+F_FLOW_INFO_QCUSB1 = 13
+F_FLOW_INFO_QCUSB2 = 14
+F_FLOW_INFO_TYPEC1 = 15
+F_FLOW_INFO_TYPEC2 = 16
+F_FLOW_INFO_12V = 33  # 12V DC output flow state
+F_POW_GET_12V = 37  # 12V DC output watts (float)
 F_PLUG_IN_INFO_AC_CHARGER_FLAG = 202  # AC charger connected (bool/uint32)
 F_BMS_BATT_SOC = 242  # BMS state of charge (float %)
 F_CMS_BATT_SOC = 262  # combined/displayed state of charge (float %)
@@ -44,6 +53,12 @@ F_POW_GET_AC_OUT = 368  # AC output watts (float, reported negative)
 # unknown field stands out in the dump.
 DISPLAY_FIELD_NAMES: dict[int, str] = {
     F_ERRCODE: "errcode",
+    F_FLOW_INFO_QCUSB1: "flow_info_qcusb1",
+    F_FLOW_INFO_QCUSB2: "flow_info_qcusb2",
+    F_FLOW_INFO_TYPEC1: "flow_info_typec1",
+    F_FLOW_INFO_TYPEC2: "flow_info_typec2",
+    F_FLOW_INFO_12V: "flow_info_12v",
+    F_POW_GET_12V: "pow_get_12v",
     F_POW_IN_SUM_W: "pow_in_sum_w",
     F_POW_OUT_SUM_W: "pow_out_sum_w",
     F_POW_GET_QCUSB1: "pow_get_qcusb1",
@@ -60,11 +75,26 @@ DISPLAY_FIELD_NAMES: dict[int, str] = {
     F_POW_GET_AC_OUT: "pow_get_ac_out",
 }
 
-# Field numbers worth a second look when hunting for undecoded ports/flags. The
-# USB block is 9-12 (two USB-A + two USB-C on a DELTA 3, of which we decode only
-# the first of each), and flow_info_ac_out at 367 sits at the end of a run of
-# varints that are very likely its per-port siblings.
-SUSPECT_FIELDS: frozenset[int] = frozenset(range(9, 13)) | frozenset(range(360, 368))
+# Field numbers worth a second look in the 'read --raw' dump: the neighbourhoods
+# of things we already decode, where a sibling field we have missed is most
+# likely to be hiding.
+SUSPECT_FIELDS: frozenset[int] = (
+    frozenset(range(9, 17)) | frozenset(range(33, 38)) | frozenset(range(360, 369))
+)
+
+
+def flow_is_on(value: Any) -> bool:
+    """Interpret a ``flow_info_*`` value as a port on/off state.
+
+    These are bitmasks, not booleans: a real DELTA 3 reports 14 (0b1110) for an
+    active port and 4 (0b0100) for an inactive one, so a plain ``bool()`` reads
+    every inactive-but-present port as ON. Only the low two bits carry the
+    state; this matches the check the EcoFlow app itself makes (and
+    ha-ef-ble's ``flow_is_on``). Values whose low bits are 0b01 are unknown and
+    treated as off.
+    """
+    return (int(value) & 0b11) in (0b10, 0b11)
+
 
 # The frame that carries DisplayPropertyUpload.
 DISPLAY_SRC = 0x02
@@ -110,8 +140,11 @@ class DeviceState:
     usb_a2_watts: float | None = None
     usb_c1_watts: float | None = None
     usb_c2_watts: float | None = None
+    dc_output_watts: float | None = None
     ac_input_present: bool | None = None
     ac_output_on: bool | None = None
+    usb_output_on: bool | None = None
+    dc_output_on: bool | None = None
     remain_charge_minutes: int | None = None
     remain_discharge_minutes: int | None = None
     error_code: int | None = None
@@ -147,10 +180,25 @@ class DeviceState:
             self.output_watts = round(float(v), 1)
         self._merge_usb(fields)
 
+        if (v := fields.get(F_POW_GET_12V)) is not None:
+            self.dc_output_watts = round(abs(float(v)), 1)
+
         if (v := fields.get(F_PLUG_IN_INFO_AC_CHARGER_FLAG)) is not None:
             self.ac_input_present = bool(v)
         if (v := fields.get(F_FLOW_INFO_AC_OUT)) is not None:
-            self.ac_output_on = bool(v)
+            self.ac_output_on = flow_is_on(v)
+        if (v := fields.get(F_FLOW_INFO_12V)) is not None:
+            self.dc_output_on = flow_is_on(v)
+        # One master switch drives all four USB ports, so whichever port's flag
+        # a (partial) frame happens to carry answers for the lot.
+        for number in (
+            F_FLOW_INFO_QCUSB1,
+            F_FLOW_INFO_QCUSB2,
+            F_FLOW_INFO_TYPEC1,
+            F_FLOW_INFO_TYPEC2,
+        ):
+            if (v := fields.get(number)) is not None:
+                self.usb_output_on = flow_is_on(v)
 
         if (v := fields.get(F_CMS_CHG_REM_TIME)) is not None:
             self.remain_charge_minutes = int(v)

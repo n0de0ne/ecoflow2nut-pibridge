@@ -32,7 +32,10 @@ yielding SoC = 75 %, AC-in = 46.3 W, etc.
 | `pow_in_sum_w` | 3 | Total input watts |
 | `pow_out_sum_w` | 4 | Total output watts |
 | `plug_in_info_ac_charger_flag` | 202 | AC charger connected (AC-input-present) |
-| `flow_info_ac_out` | 367 | AC output on/off |
+| `flow_info_ac_out` | 367 | AC output flow state — a bitmask, see below |
+| `flow_info_qcusb1/2`, `flow_info_typec1/2` | 13-16 | USB port flow state (one master switch drives all four) |
+| `flow_info_12v` | 33 | 12V DC output flow state |
+| `pow_get_12v` | 37 | 12V DC output watts |
 | `cms_chg_rem_time` / `cms_dsg_rem_time` | 269 / 268 | Remaining minutes |
 | `errcode` | 1 | Error code |
 
@@ -71,18 +74,29 @@ accumulates rather than diffing against the previous frame alone.
 
 ## Gaps / TODO
 
-0. **No USB on/off flag is decoded.** USB state is inferred from power draw, so
-   0 W cannot distinguish "port off" from "port on but nothing drawing". Frames
-   contain an undecoded run of varints at **362-366**, immediately before the
-   known `flow_info_ac_out` (367) — very likely its per-port siblings, one of
-   which would give USB a true ON/OFF state. Not yet identified: settle it with
-   `read --raw --watch` while switching a port, and watch for the number that
-   moves.
+### `flow_info_*` is a bitmask, not a boolean
 
-   Related: `flow_info_ac_out` is **not a boolean**. It read `2` on a River 3
-   capture and `14` on a real DELTA 3 with AC output active, so it is an enum or
-   a bitfield. `delta3.py` does `bool(v)`, which gives the right answer for
-   on-vs-off but would misread any "standby"-style intermediate value.
+Only the low two bits carry the port state: `0b10` and `0b11` mean on, anything
+else means off (`delta3.flow_is_on`). This matches the check the EcoFlow app
+makes and ha-ef-ble's `flow_is_on`.
+
+It matters. A real DELTA 3 reports **14** (`0b1110`) for an active port and
+**4** (`0b0100`) for an inactive one, so `bool(value)` — which this code used
+for `flow_info_ac_out` until the values were actually inspected — reads an
+inactive-but-present port as ON. Observed on one device in a single frame:
+
+| field | value | state |
+|---|---|---|
+| `flow_info_qcusb1/2`, `flow_info_typec1/2` (13-16) | 14 | on |
+| `flow_info_ac_in` (47) | 15 | on |
+| `flow_info_ac_out` (367) | 14 | on |
+| `flow_info_12v` (33) | 4 | **off** |
+| `flow_info_pv` (360), `flow_info_pv2` (414) | 8 | **off** |
+| `flow_info_dcp_in/out` (423/424) | 0 | off |
+
+Field numbers here were read out of `pd335_sys_pb2.py`'s serialized descriptor
+in ha-ef-ble rather than guessed; every constant this project already used was
+confirmed against it at the same time.
 
 1. **Auth (`encrypt_type 7`) is hardware-untested.** The ECDH handshake, session
    key derivation (`gen_session_key` + vendored `keydata.py`) and `EncPacket`
