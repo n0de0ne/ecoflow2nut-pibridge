@@ -428,6 +428,8 @@ already auto-booted from AC restore. Password-protected Bots are not supported.
 ecoflow-nut --config config.yaml read     # connect, read one frame, dump JSON
 ecoflow-nut --config config.yaml run      # run the daemon (default mode)
 ecoflow-nut --config config.yaml ac on    # toggle AC output  (also: ac off)
+ecoflow-nut --config config.yaml read --raw          # every protobuf field the device sends
+ecoflow-nut --config config.yaml read --raw --watch  # ... and mark what changes
 ecoflow-nut --config config.yaml usb on   # toggle USB output (also: usb off)
 ecoflow-nut --config config.yaml dc on    # toggle 12V DC out (also: dc off)
 ```

@@ -19,6 +19,7 @@ from ecoflow_nut.protocol import (
     PacketError,
     ProtoField,
     _read_varint,
+    decode_fields,
     decode_message,
     encode_bool_field,
     encode_message,
@@ -93,6 +94,58 @@ def test_state_merge_from_real_frame():
     assert state.ac_input_watts == pytest.approx(46.3, abs=0.1)
     # AC output is reported negative on the wire; we expose absolute load.
     assert state.ac_output_watts == pytest.approx(46.3, abs=0.1)
+
+
+def test_decode_fields_keeps_wire_types():
+    """The raw diagnostic needs the wire type: a varint flag and a float reading
+    are the difference between "port is on" and "port is drawing 3 W"."""
+    packet = Packet.from_bytes(REAL_FRAMES[0], xor_payload=True)
+    rows = decode_fields(packet.payload)
+    by_number = {num: (wire, value) for num, wire, value in rows}
+    assert by_number[delta3.F_CMS_BATT_SOC][0] == WIRE_I32
+    assert by_number[delta3.F_ERRCODE][0] == WIRE_VARINT
+    # Same values as decode_message, just with the wire type retained.
+    assert by_number[delta3.F_POW_GET_AC_IN][1] == pytest.approx(46.32, abs=0.1)
+
+
+def test_decode_fields_sees_more_than_we_decode():
+    """Guards the premise of `read --raw`: most of the frame is undecoded, so a
+    missing reading is far more likely a field we ignore than a parsing bug."""
+    seen = set()
+    for frame in REAL_FRAMES:
+        packet = Packet.from_bytes(frame, xor_payload=True)
+        seen.update(num for num, _, _ in decode_fields(packet.payload))
+    assert len(seen) > 100
+    assert seen >= set(delta3.DISPLAY_FIELD_NAMES)
+    undecoded = seen - set(delta3.DISPLAY_FIELD_NAMES)
+    # The USB neighbours of the two ports we do decode, and the run of varints
+    # ending at flow_info_ac_out -- the candidates the diagnostic flags with "?".
+    assert {10, 12} <= undecoded
+    assert {362, 363, 364, 365, 366} <= undecoded
+
+
+def test_usb_watt_fields_decode_from_a_real_frame():
+    """Fields 9/11 had no coverage at all. They are present and zero here (the
+    capture device had nothing plugged into USB), which is exactly the reading
+    that makes the dashboard show "idle/off"."""
+    packet = Packet.from_bytes(REAL_FRAMES[0], xor_payload=True)
+    fields = decode_message(packet.payload)
+    assert fields[delta3.F_POW_GET_QCUSB1] == pytest.approx(0.0)
+    assert fields[delta3.F_POW_GET_TYPEC1] == pytest.approx(0.0)
+    state = DeviceState()
+    state.merge_display_payload(packet.payload)
+    assert state.usb_output_watts == pytest.approx(0.0)
+    assert state.usbc_output_watts == pytest.approx(0.0)
+
+
+def test_field_names_cover_every_decoded_constant():
+    """The diagnostic labels known fields; a new constant must not go unlabelled."""
+    constants = {
+        value
+        for name, value in vars(delta3).items()
+        if name.startswith("F_") and isinstance(value, int)
+    }
+    assert constants == set(delta3.DISPLAY_FIELD_NAMES)
 
 
 def test_state_merge_accumulates_across_frames():
