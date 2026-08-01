@@ -118,16 +118,15 @@ def test_decode_fields_sees_more_than_we_decode():
     assert len(seen) > 100
     assert seen >= set(delta3.DISPLAY_FIELD_NAMES)
     undecoded = seen - set(delta3.DISPLAY_FIELD_NAMES)
-    # The USB neighbours of the two ports we do decode, and the run of varints
-    # ending at flow_info_ac_out -- the candidates the diagnostic flags with "?".
-    assert {10, 12} <= undecoded
+    # The run of varints ending at flow_info_ac_out (367). One of these is very
+    # likely a per-port flow flag, which would give USB a true ON/OFF state
+    # instead of one inferred from watts -- still unidentified.
     assert {362, 363, 364, 365, 366} <= undecoded
 
 
 def test_usb_watt_fields_decode_from_a_real_frame():
-    """Fields 9/11 had no coverage at all. They are present and zero here (the
-    capture device had nothing plugged into USB), which is exactly the reading
-    that makes the dashboard show "idle/off"."""
+    """Fields 9/11 had no coverage at all; all four ports read zero here (the
+    capture device had nothing plugged into USB)."""
     packet = Packet.from_bytes(REAL_FRAMES[0], xor_payload=True)
     fields = decode_message(packet.payload)
     assert fields[delta3.F_POW_GET_QCUSB1] == pytest.approx(0.0)
@@ -136,6 +135,58 @@ def test_usb_watt_fields_decode_from_a_real_frame():
     state.merge_display_payload(packet.payload)
     assert state.usb_output_watts == pytest.approx(0.0)
     assert state.usbc_output_watts == pytest.approx(0.0)
+
+
+def _usb_payload(**ports: float) -> bytes:
+    """A synthetic DisplayPropertyUpload carrying only the named USB ports."""
+    numbers = {
+        "a1": delta3.F_POW_GET_QCUSB1,
+        "a2": delta3.F_POW_GET_QCUSB2,
+        "c1": delta3.F_POW_GET_TYPEC1,
+        "c2": delta3.F_POW_GET_TYPEC2,
+    }
+    return encode_message(
+        [ProtoField(numbers[name], WIRE_I32, watts) for name, watts in ports.items()]
+    )
+
+
+def test_second_usb_port_is_counted():
+    """The reported bug: a load on port 2 was invisible, so the dashboard showed
+    0 W and "idle/off" while the EcoFlow app reported the port drawing. On a real
+    DELTA 3 the draw arrived on field 12 with 9/10/11 all at 0.0."""
+    state = DeviceState()
+    state.merge_display_payload(_usb_payload(a1=0.0, a2=0.0, c1=0.0, c2=-1.0))
+    assert state.usbc_output_watts == pytest.approx(1.0)
+    assert state.usb_output_watts == pytest.approx(0.0)
+
+
+def test_usb_ports_of_the_same_type_are_summed():
+    state = DeviceState()
+    state.merge_display_payload(_usb_payload(a1=-2.5, a2=-1.5, c1=-3.0, c2=-1.0))
+    assert state.usb_output_watts == pytest.approx(4.0)
+    assert state.usbc_output_watts == pytest.approx(4.0)
+
+
+def test_a_partial_frame_does_not_zero_an_unmentioned_port():
+    """Frames carry only what changed, so summing just what arrived would drop a
+    port's last-known draw the moment a frame omitted it."""
+    state = DeviceState()
+    state.merge_display_payload(_usb_payload(c1=0.0, c2=-1.0))
+    assert state.usbc_output_watts == pytest.approx(1.0)
+    # A later frame mentions only port 1; port 2 is still drawing.
+    state.merge_display_payload(_usb_payload(c1=0.0))
+    assert state.usbc_output_watts == pytest.approx(1.0)
+    # And when port 2 genuinely drops to zero, the total follows.
+    state.merge_display_payload(_usb_payload(c2=0.0))
+    assert state.usbc_output_watts == pytest.approx(0.0)
+
+
+def test_usb_totals_stay_none_until_a_port_reports():
+    """ "Not reported" must read differently from "reported zero"."""
+    state = DeviceState()
+    state.merge_display_payload(encode_message([]))
+    assert state.usb_output_watts is None
+    assert state.usbc_output_watts is None
 
 
 def test_field_names_cover_every_decoded_constant():

@@ -44,8 +44,9 @@ function renderPorts(s) {
   const usbW = Math.round((s.usb_output_watts ?? 0) + (s.usbc_output_watts ?? 0));
   setPort("stUsb", usbW > 0 ? "on" : "unknown",
     usbW > 0 ? `ON · ${usbW}W` : "— idle/off",
-    usbW > 0 ? "" : "Inferred from power draw; the device reports no USB enable " +
-      "flag, so 0 W means off OR on-but-idle.");
+    usbW > 0 ? "" : "Total across all four ports, inferred from draw: no USB " +
+      "enable flag has been identified in the protocol, so 0 W means off OR " +
+      "on-but-idle.");
 
   setPort("stDc", "unknown", "n/a",
     "The DELTA 3 sends no 12V DC telemetry, so its on/off state is unknown.");

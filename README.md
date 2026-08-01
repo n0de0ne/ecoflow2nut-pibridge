@@ -502,8 +502,9 @@ DC**, plus the auto-shutdown state and a live enable/disable. When the
 [SwitchBot](#server-power-button-switchbot) **Press** button if that's enabled.
 
 A coloured LED sits next to each control. **AC** shows a true ON/OFF from the
-device's decoded flag (`flow_info_ac_out`). **USB** is inferred from power draw
-(the device exposes no USB enable flag), so it reads `ON · NW` when drawing and
+device's decoded flag (`flow_info_ac_out`). **USB** sums all four ports (two
+USB-A, two USB-C) and is inferred from that draw, since no USB enable flag has
+been identified in the protocol yet, so it reads `ON · NW` when drawing and
 `— idle/off` otherwise — 0 W is ambiguous, noted in its tooltip. **12V DC** shows
 `n/a` (the device sends no DC telemetry). The **auto-shutdown** badge is grey
 *Disabled*, green *Monitoring*, pulsing amber *ARMED · cutting in Ns*, or pulsing

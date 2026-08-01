@@ -27,8 +27,8 @@ yielding SoC = 75 %, AC-in = 46.3 W, etc.
 | `bms_batt_soc` | 242 | SoC fallback |
 | `pow_get_ac_in` | 54 | AC input watts |
 | `pow_get_ac_out` | 368 | AC output watts (reported negative; abs() taken) |
-| `pow_get_qcusb1` | 9 | USB-A port **1** watts — see the USB gap below |
-| `pow_get_typec1` | 11 | USB-C port **1** watts — see the USB gap below |
+| `pow_get_qcusb1` / `pow_get_qcusb2` | 9 / 10 | USB-A watts per port (negative; abs() taken, both summed) |
+| `pow_get_typec1` / `pow_get_typec2` | 11 / 12 | USB-C watts per port (negative; abs() taken, both summed) |
 | `pow_in_sum_w` | 3 | Total input watts |
 | `pow_out_sum_w` | 4 | Total output watts |
 | `plug_in_info_ac_charger_flag` | 202 | AC charger connected (AC-input-present) |
@@ -71,22 +71,18 @@ accumulates rather than diffing against the previous frame alone.
 
 ## Gaps / TODO
 
-0. **USB is under-decoded, and its on/off state is unverified.** Only port 1 of
-   each USB type is read (`pow_get_qcusb1` 9, `pow_get_typec1` 11), but a DELTA 3
-   has two of each and fields **10 and 12** sit right beside them in every frame,
-   same float wire type, never decoded — almost certainly the second ports. A
-   load on one of those is invisible to the bridge, which then shows USB as
-   "idle/off" at 0 W while the EcoFlow app reports it drawing.
+0. **No USB on/off flag is decoded.** USB state is inferred from power draw, so
+   0 W cannot distinguish "port off" from "port on but nothing drawing". Frames
+   contain an undecoded run of varints at **362-366**, immediately before the
+   known `flow_info_ac_out` (367) — very likely its per-port siblings, one of
+   which would give USB a true ON/OFF state. Not yet identified: settle it with
+   `read --raw --watch` while switching a port, and watch for the number that
+   moves.
 
-   Separately, the claim that the device exposes no USB enable flag was never
-   actually checked. Frames contain an undecoded run of varints at **362-366**
-   immediately before the known `flow_info_ac_out` (367) with small enum-like
-   values — very likely its per-port siblings. Note also that `flow_info_ac_out`
-   reads **2**, not 1, so these are enums (0/1/2), and `delta3.py`'s `bool(v)` is
-   semantically loose. Use `read --raw --watch` to settle all of this on real
-   hardware before decoding anything.
-
-
+   Related: `flow_info_ac_out` is **not a boolean**. It read `2` on a River 3
+   capture and `14` on a real DELTA 3 with AC output active, so it is an enum or
+   a bitfield. `delta3.py` does `bool(v)`, which gives the right answer for
+   on-vs-off but would misread any "standby"-style intermediate value.
 
 1. **Auth (`encrypt_type 7`) is hardware-untested.** The ECDH handshake, session
    key derivation (`gen_session_key` + vendored `keydata.py`) and `EncPacket`

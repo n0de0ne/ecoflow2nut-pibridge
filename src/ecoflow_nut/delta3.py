@@ -11,6 +11,7 @@ cross-checked by decoding real captured frames from a sibling device
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from . import protocol
 from .protocol import Packet, ProtoField
@@ -19,8 +20,16 @@ from .protocol import Packet, ProtoField
 F_ERRCODE = 1
 F_POW_IN_SUM_W = 3  # total input watts (float)
 F_POW_OUT_SUM_W = 4  # total output watts (float)
+# A DELTA 3 has two USB-A and two USB-C ports and reports each separately, all
+# as negative floats (like AC output). Reading only port 1 of each made a load on
+# a second port invisible: the dashboard showed 0 W and "idle/off" while the
+# EcoFlow app reported the port on and drawing. Field 12 is confirmed against a
+# real DELTA 3 (it carried the bridge's own ~1 W with 9/10/11 all at 0.0);
+# 10 is inferred from the pattern and reads 0.0 on the same frame.
 F_POW_GET_QCUSB1 = 9  # USB-A port 1 watts (float)
+F_POW_GET_QCUSB2 = 10  # USB-A port 2 watts (float)
 F_POW_GET_TYPEC1 = 11  # USB-C port 1 watts (float)
+F_POW_GET_TYPEC2 = 12  # USB-C port 2 watts (float)
 F_PLUG_IN_INFO_AC_CHARGER_FLAG = 202  # AC charger connected (bool/uint32)
 F_BMS_BATT_SOC = 242  # BMS state of charge (float %)
 F_CMS_BATT_SOC = 262  # combined/displayed state of charge (float %)
@@ -38,7 +47,9 @@ DISPLAY_FIELD_NAMES: dict[int, str] = {
     F_POW_IN_SUM_W: "pow_in_sum_w",
     F_POW_OUT_SUM_W: "pow_out_sum_w",
     F_POW_GET_QCUSB1: "pow_get_qcusb1",
+    F_POW_GET_QCUSB2: "pow_get_qcusb2",
     F_POW_GET_TYPEC1: "pow_get_typec1",
+    F_POW_GET_TYPEC2: "pow_get_typec2",
     F_POW_GET_AC_IN: "pow_get_ac_in",
     F_PLUG_IN_INFO_AC_CHARGER_FLAG: "plug_in_info_ac_charger_flag",
     F_BMS_BATT_SOC: "bms_batt_soc",
@@ -87,8 +98,18 @@ class DeviceState:
     ac_output_watts: float | None = None
     input_watts: float | None = None
     output_watts: float | None = None
+    # Totals across all ports of each type -- what the UI, NUT and the telemetry
+    # store consume.
     usb_output_watts: float | None = None
     usbc_output_watts: float | None = None
+    # Per-port readings behind those totals. Held separately because frames are
+    # partial: a frame carrying only port 1 must not wipe what port 2 last
+    # reported, so the totals are recomputed from last-known values rather than
+    # from whatever happened to arrive.
+    usb_a1_watts: float | None = None
+    usb_a2_watts: float | None = None
+    usb_c1_watts: float | None = None
+    usb_c2_watts: float | None = None
     ac_input_present: bool | None = None
     ac_output_on: bool | None = None
     remain_charge_minutes: int | None = None
@@ -124,10 +145,7 @@ class DeviceState:
             self.input_watts = round(float(v), 1)
         if (v := fields.get(F_POW_OUT_SUM_W)) is not None:
             self.output_watts = round(float(v), 1)
-        if (v := fields.get(F_POW_GET_QCUSB1)) is not None:
-            self.usb_output_watts = round(abs(float(v)), 1)
-        if (v := fields.get(F_POW_GET_TYPEC1)) is not None:
-            self.usbc_output_watts = round(abs(float(v)), 1)
+        self._merge_usb(fields)
 
         if (v := fields.get(F_PLUG_IN_INFO_AC_CHARGER_FLAG)) is not None:
             self.ac_input_present = bool(v)
@@ -140,6 +158,31 @@ class DeviceState:
             self.remain_discharge_minutes = int(v)
         if (v := fields.get(F_ERRCODE)) is not None:
             self.error_code = int(v)
+
+    def _merge_usb(self, fields: dict[int, Any]) -> None:
+        """Update the per-port USB readings, then recompute the two totals.
+
+        Ports report negative watts (as AC output does); we expose the load as a
+        positive number. Totals are summed from last-known per-port values so a
+        partial frame cannot zero a port it simply did not mention.
+        """
+        for number, attr in (
+            (F_POW_GET_QCUSB1, "usb_a1_watts"),
+            (F_POW_GET_QCUSB2, "usb_a2_watts"),
+            (F_POW_GET_TYPEC1, "usb_c1_watts"),
+            (F_POW_GET_TYPEC2, "usb_c2_watts"),
+        ):
+            if (v := fields.get(number)) is not None:
+                setattr(self, attr, round(abs(float(v)), 1))
+
+        for total, ports in (
+            ("usb_output_watts", (self.usb_a1_watts, self.usb_a2_watts)),
+            ("usbc_output_watts", (self.usb_c1_watts, self.usb_c2_watts)),
+        ):
+            # Stay None until at least one port of that type has been seen, so
+            # "not reported" reads differently from "reported zero".
+            if any(p is not None for p in ports):
+                setattr(self, total, round(sum(p or 0.0 for p in ports), 1))
 
     def is_display_packet(self, packet: Packet) -> bool:
         return (
