@@ -179,7 +179,19 @@ FIELDS: tuple[Field, ...] = (
         "NUT thresholds",
         0,
         5000,
+        "Fallback only, for models that do not measure input voltage: "
         "AC input above this counts as 'on line' (OL).",
+    ),
+    Field(
+        "nut.ac_input_present_min_volts",
+        ("nut", "ac_input_present_min_volts"),
+        "int",
+        "AC-present min (V)",
+        "NUT thresholds",
+        0,
+        500,
+        "Preferred where the device measures it (DELTA 2 generation): mains "
+        "above this many volts count as 'on line' (OL), whatever the wattage.",
     ),
     Field(
         "nut.input_transfer_low",

@@ -1,4 +1,4 @@
-"""Translate DELTA 3 telemetry into NUT variables and a dummy-ups ``.dev`` file.
+"""Translate power-station telemetry into NUT variables and a dummy-ups file.
 
 The NUT ``dummy-ups`` driver in "repeating" mode reads a file of ``name: value``
 lines and republishes them. We rewrite that file every poll cycle so any NUT
@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 from .config import NutConfig
-from .delta3 import DeviceState
+from .state import DeviceState
 
 # Status flags
 STATUS_ONLINE = "OL"
@@ -27,20 +27,31 @@ _INVERTER_EFFICIENCY = 0.9
 def derive_status(state: DeviceState, nut: NutConfig) -> str:
     """Derive ``ups.status`` from telemetry.
 
-    * On line (``OL``) when AC input is present and meaningfully drawing power.
+    * On line (``OL``) when the mains are present at the AC input.
     * On battery + low (``OB LB``) when SoC drops below the low threshold.
     * Otherwise on battery (``OB``).
+
+    "Mains present" is read from whichever evidence the model gives us. Measured
+    AC input voltage is preferred and used alone: it stays at nominal on a full
+    battery drawing nothing, whereas input watts fall to zero there and would
+    otherwise report a false outage. Models that do not report voltage (the
+    DELTA 3) fall back to the charger flag confirmed by input watts.
     """
     ac_watts = state.ac_input_watts or 0.0
-    # The DELTA 3 does not include the AC-charger flag in every frame; until we
-    # have seen it, infer AC presence from AC input watts.
-    if state.ac_input_present is not None:
-        ac_present = state.ac_input_present
+    drawing = ac_watts > nut.ac_input_present_min_watts
+    volts = state.ac_input_voltage
+
+    if volts is not None:
+        ac_present = volts >= nut.ac_input_present_min_volts
+    elif state.ac_input_present is not None:
+        # The charger flag alone can be stale, so require live draw to confirm.
+        ac_present = state.ac_input_present and drawing
     else:
-        ac_present = ac_watts > nut.ac_input_present_min_watts
+        ac_present = drawing
+
     soc = state.soc_percent if state.soc_percent is not None else 100.0
 
-    if ac_present and ac_watts > nut.ac_input_present_min_watts:
+    if ac_present:
         return STATUS_ONLINE
     if soc < nut.thresholds.low_battery_percent:
         return f"{STATUS_ON_BATTERY} {STATUS_LOW_BATTERY}"
@@ -91,7 +102,14 @@ def build_variables(state: DeviceState, nut: NutConfig) -> dict[str, str]:
         "battery.runtime.low": str(nut.battery_runtime_low_seconds),
         "battery.type": nut.battery_type,
         "battery.voltage.nominal": _fmt(nut.battery_voltage_nominal),
-        "input.voltage": str(static.input_voltage),
+        # Report the measured mains voltage when the model provides it, so
+        # clients see a real reading (and a real 0 V during an outage) rather
+        # than a constant. Falls back to the configured nominal otherwise.
+        "input.voltage": (
+            _fmt(state.ac_input_voltage)
+            if state.ac_input_voltage is not None
+            else str(static.input_voltage)
+        ),
         "input.frequency": str(static.input_frequency),
         "input.transfer.low": str(nut.input_transfer_low),
         "input.transfer.high": str(nut.input_transfer_high),

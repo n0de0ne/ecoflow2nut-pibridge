@@ -88,7 +88,7 @@ def test_real_frame_decodes_expected_telemetry():
 def test_state_merge_from_real_frame():
     packet = Packet.from_bytes(REAL_FRAMES[0], xor_payload=True)
     state = DeviceState()
-    state.merge_display_payload(packet.payload)
+    delta3.merge_display_payload(state, packet.payload)
     assert state.soc_percent == pytest.approx(75.0)
     assert state.ac_input_watts == pytest.approx(46.3, abs=0.1)
     # AC output is reported negative on the wire; we expose absolute load.
@@ -99,7 +99,7 @@ def test_state_merge_accumulates_across_frames():
     state = DeviceState()
     for frame in REAL_FRAMES:
         packet = Packet.from_bytes(frame, xor_payload=True)
-        state.merge_display_payload(packet.payload)
+        delta3.merge_display_payload(state, packet.payload)
     # SoC seen in the first frame must persist even though later frames omit it.
     assert state.soc_percent == pytest.approx(75.0)
 

@@ -4,7 +4,8 @@ import pytest
 from click.testing import CliRunner
 
 from ecoflow_nut.cli import cli
-from ecoflow_nut.main import OUTPUT_BUILDERS, parse_control_command
+from ecoflow_nut.devices import DRIVERS, OUTPUT_KINDS
+from ecoflow_nut.main import parse_control_command
 
 
 def _write_config(tmp_path) -> str:
@@ -58,5 +59,10 @@ def test_parse_control_command_rejects(line):
         parse_control_command(line)
 
 
-def test_output_builders_cover_all_kinds():
-    assert set(OUTPUT_BUILDERS) == {"ac", "usb", "dc"}
+def test_every_driver_builds_every_output_kind():
+    assert set(OUTPUT_KINDS) == {"ac", "usb", "dc"}
+    for name, driver in DRIVERS.items():
+        for kind in OUTPUT_KINDS:
+            for enabled in (True, False):
+                packet = driver.output_packet(kind, enabled)
+                assert packet.payload, f"{name}/{kind} produced an empty payload"

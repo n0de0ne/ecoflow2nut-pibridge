@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from .config import PostgresConfig
-from .delta3 import DeviceState
+from .state import DeviceState
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import asyncpg

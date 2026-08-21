@@ -1,14 +1,21 @@
 """BLE transport for EcoFlow power stations using ``bleak``.
 
 Implements the connection lifecycle, the EcoFlow session handshake (encrypt
-types 0 / 1 / 7), wire-level frame (re)assembly, and decoding of incoming
-packets into a rolling :class:`~ecoflow_nut.delta3.DeviceState`.
+types 0 / 1 / 7) and wire-level frame (re)assembly. Decoding the resulting
+packets is the model driver's job (see :mod:`ecoflow_nut.devices`): this module
+hands each frame to the configured driver, which merges it into a rolling
+:class:`~ecoflow_nut.state.DeviceState`.
+
+Both frame generations are handled here. The V2 frames used by the DELTA 2
+generation are two bytes shorter in the header than the V3 frames of the DELTA 3
+generation, which matters for reassembly and for the authentication packets --
+those must go out in the version the device speaks.
 
 Handshake / encryption details mirror the reverse engineering in
 https://github.com/rabits/ha-ef-ble (Apache-2.0). The verified-correct read
 path -- V3 framing + protobuf decode -- is exercised by the test suite against
 real captured frames. The encrypted handshakes (type 1 and especially the
-ECDH-based type 7 used by the DELTA 3) require hardware to validate end to end.
+ECDH-based type 7) require hardware to validate end to end.
 """
 
 from __future__ import annotations
@@ -27,10 +34,11 @@ from bleak.backends.device import BLEDevice
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 
-from . import delta3, keydata
+from . import devices, keydata
 from .config import BleConfig, EcoflowConfig
-from .delta3 import DeviceState
-from .protocol import Packet, PacketError, crc16
+from .devices import DeviceDriver
+from .protocol import Packet, PacketError, crc8, crc16
+from .state import DeviceState
 
 log = structlog.get_logger(__name__)
 
@@ -155,10 +163,17 @@ class PassthroughAssembler(FrameAssembler):
                 data = b""
                 break
             data = data[start:]
-            if len(data) < 20:
+            if len(data) < 5:
                 break
+            # Frame layout differs by version: V2 has no dsrc/ddst, so its
+            # payload starts two bytes earlier than V3's.
+            if crc8(data[:4]) != data[4]:
+                # Not a real header -- a 0xAA inside a payload. Resync past it.
+                data = data[1:]
+                continue
+            header_len = 16 if (data[1] & 0x0F) == 2 else 18
             length = struct.unpack_from("<H", data, 2)[0]
-            frame_len = 18 + length + 2
+            frame_len = header_len + length + 2
             if len(data) < frame_len:
                 break
             payloads.append(data[:frame_len])
@@ -228,8 +243,6 @@ class RawHeaderAssembler(FrameAssembler):
         return raw[:5] + self._enc.encrypt(raw[5:])
 
     def reassemble(self, data: bytes) -> list[bytes]:
-        from .protocol import crc8
-
         data = self._buffer + data
         self._buffer = b""
         payloads: list[bytes] = []
@@ -294,6 +307,51 @@ def parse_encrypt_type(manufacturer_data: dict[int, bytes]) -> int | None:
     return None
 
 
+async def scan_devices(adapter: str | None, timeout: float) -> list[dict[str, object]]:
+    """Scan for BLE devices, annotating the ones that look like EcoFlow units.
+
+    A diagnostic for identifying an unknown power station: EcoFlow advertises a
+    name of the form ``EF-<model prefix><serial tail>`` (``EF-D3…`` for a
+    DELTA 3, ``EF-R35…`` for a DELTA 2 Max), and the manufacturer payload
+    carries the ``encrypt_type`` the handshake must use.
+    """
+    found: dict[str, dict[str, object]] = {}
+
+    def _cb(device: BLEDevice, adv) -> None:
+        mfr = dict(getattr(adv, "manufacturer_data", {}) or {})
+        previous = found.get(device.address, {})
+        # Names and manufacturer data arrive in different advertisement packets,
+        # so merge rather than replace: keep whichever fields we have seen.
+        name = device.name or previous.get("name") or ""
+        if not mfr and previous.get("manufacturer_data"):
+            payloads = previous["manufacturer_data"]
+        else:
+            payloads = {str(k): v.hex() for k, v in mfr.items()}
+        encrypt_type = parse_encrypt_type(mfr)
+        if encrypt_type is None:
+            encrypt_type = previous.get("encrypt_type")  # type: ignore[assignment]
+        found[device.address] = {
+            "mac": device.address,
+            "name": name,
+            "rssi": getattr(adv, "rssi", None),
+            "looks_like_ecoflow": str(name).upper().startswith("EF-"),
+            "encrypt_type": encrypt_type,
+            "manufacturer_data": payloads,
+        }
+
+    scanner = BleakScanner(detection_callback=_cb, adapter=adapter)
+    await scanner.start()
+    try:
+        await asyncio.sleep(timeout)
+    finally:
+        await scanner.stop()
+    # EcoFlow devices first, then by signal strength.
+    return sorted(
+        found.values(),
+        key=lambda d: (not d["looks_like_ecoflow"], -(d["rssi"] or -999)),  # type: ignore[operator]
+    )
+
+
 # --------------------------------------------------------------------------- #
 # BLE client
 # --------------------------------------------------------------------------- #
@@ -305,10 +363,17 @@ class EcoFlowBLE:
         ecoflow: EcoflowConfig,
         ble: BleConfig,
         on_state: Callable[[DeviceState], None] | None = None,
+        on_packet: Callable[[Packet], None] | None = None,
     ) -> None:
         self._ecoflow = ecoflow
         self._ble = ble
         self._on_state = on_state
+        # Fires for every decoded frame, recognised or not -- used by the
+        # ``sniff`` diagnostic to see traffic no driver claims yet.
+        self._on_packet = on_packet
+        # Raises ValueError on an unknown model, at construction rather than
+        # after a connection has been established.
+        self._driver: DeviceDriver = devices.get_driver(ecoflow.model)
 
         self.state = DeviceState()
         self._client: BleakClient | None = None
@@ -319,6 +384,10 @@ class EcoFlowBLE:
         self._encrypt_type = 0
         self._authenticated = asyncio.Event()
         self._last_read_monotonic: float = 0.0
+
+    @property
+    def driver(self) -> DeviceDriver:
+        return self._driver
 
     @property
     def last_read_monotonic(self) -> float:
@@ -426,6 +495,7 @@ class EcoFlowBLE:
         if self._encrypt_type == 0:
             self._assembler = PassthroughAssembler()
             await self._start_notify(self._on_notify)
+            await self._request_auth_status()
             await self._auto_authenticate()
         elif self._encrypt_type == 1:
             sn = self._ecoflow.serial
@@ -434,6 +504,7 @@ class EcoFlowBLE:
             self._encryption = Type1Encryption(session_key, iv)
             self._assembler = RawHeaderAssembler(self._encryption)
             await self._start_notify(self._on_notify)
+            await self._request_auth_status()
             await self._auto_authenticate()
         else:
             await self._ecdh_handshake()
@@ -484,17 +555,27 @@ class EcoFlowBLE:
 
         # Step 3: auth status, then authenticate.
         log.debug("ecdh.step3_auth")
-        await self._send_packet(Packet(0x21, _AUTH_DST, 0x35, 0x89, b"", 0x01, 0x01, 3))
+        await self._request_auth_status()
         await self._start_notify(self._on_notify)
         await self._auto_authenticate()
         log.debug("ecdh.step3_auth_sent")
+
+    async def _request_auth_status(self) -> None:
+        """Wake the auth state machine before sending credentials (cmd 0x89)."""
+        version = self._driver.packet_version
+        await self._send_packet(
+            Packet(0x21, _AUTH_DST, 0x35, 0x89, b"", 0x01, 0x01, version)
+        )
 
     async def _auto_authenticate(self) -> None:
         digest = hashlib.md5(
             (self._ecoflow.user_id + self._ecoflow.serial).encode("ascii")
         ).digest()
         payload = "".join(f"{b:02X}" for b in digest).encode("ascii")
-        packet = Packet(0x21, _AUTH_DST, 0x35, 0x86, payload, 0x01, 0x01, 3)
+        # Credentials must go out in the frame version the model speaks: the
+        # DELTA 2 generation is V2, the DELTA 3 generation V3.
+        version = self._driver.packet_version
+        packet = Packet(0x21, _AUTH_DST, 0x35, 0x86, payload, 0x01, 0x01, version)
         await self._send_packet(packet)
 
     # -- IO ----------------------------------------------------------------- #
@@ -561,7 +642,7 @@ class EcoFlowBLE:
 
     def _handle_payload(self, raw: bytes) -> None:
         try:
-            packet = Packet.from_bytes(raw, xor_payload=True)
+            packet = Packet.from_bytes(raw, xor_payload=self._driver.xor_payload)
         except PacketError as exc:
             log.debug("ble.packet_parse_skip", error=str(exc))
             return
@@ -578,10 +659,12 @@ class EcoFlowBLE:
             plen=len(packet.payload),
         )
 
-        if delta3.DISPLAY_SRC == packet.src and self.state.is_display_packet(packet):
-            self.state.merge_display_payload(packet.payload)
+        if self._on_packet is not None:
+            self._on_packet(packet)
+
+        if self._driver.handle_packet(self.state, packet):
             log.debug(
-                "ble.display",
+                "ble.telemetry",
                 soc=self.state.soc_percent,
                 ac_present=self.state.ac_input_present,
                 ac_in=self.state.ac_input_watts,

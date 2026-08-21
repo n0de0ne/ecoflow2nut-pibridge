@@ -14,6 +14,17 @@ from dataclasses import dataclass
 
 from . import protocol
 from .protocol import Packet, ProtoField
+from .state import DeviceState
+
+__all__ = [
+    "DRIVER",
+    "Delta3Driver",
+    "DeviceState",
+    "merge_display_payload",
+    "set_ac_enabled_packet",
+    "set_dc_enabled_packet",
+    "set_usb_enabled_packet",
+]
 
 # --- DisplayPropertyUpload field numbers (read) ---------------------------- #
 F_ERRCODE = 1
@@ -48,80 +59,52 @@ CONFIG_CMD_ID = 0x11
 CONFIG_VERSION = 0x13
 
 
-@dataclass(slots=True)
-class DeviceState:
-    """Accumulated DELTA 3 telemetry.
+def merge_display_payload(state: DeviceState, payload: bytes) -> None:
+    """Merge a DisplayPropertyUpload protobuf payload into ``state``.
 
-    The device only includes changed fields in each DisplayPropertyUpload, so we
-    merge successive frames into a single rolling state and keep last-known
-    values for fields that are absent in a given frame.
+    The device only includes changed fields in each upload, so absent fields
+    keep their last-known value.
     """
+    fields = protocol.decode_message(payload)
 
-    soc_percent: float | None = None
-    ac_input_watts: float | None = None
-    ac_output_watts: float | None = None
-    input_watts: float | None = None
-    output_watts: float | None = None
-    usb_output_watts: float | None = None
-    usbc_output_watts: float | None = None
-    ac_input_present: bool | None = None
-    ac_output_on: bool | None = None
-    remain_charge_minutes: int | None = None
-    remain_discharge_minutes: int | None = None
-    error_code: int | None = None
+    if (v := fields.get(F_CMS_BATT_SOC)) is not None:
+        state.soc_percent = round(float(v), 1)
+    elif (v := fields.get(F_BMS_BATT_SOC)) is not None:
+        state.soc_percent = round(float(v), 1)
 
-    @property
-    def is_complete(self) -> bool:
-        """True once the essential value (SoC) has been seen.
+    if (v := fields.get(F_POW_GET_AC_IN)) is not None:
+        state.ac_input_watts = round(float(v), 1)
+    if (v := fields.get(F_POW_GET_AC_OUT)) is not None:
+        # AC output is reported negative; expose it as a positive load.
+        state.ac_output_watts = round(abs(float(v)), 1)
+    if (v := fields.get(F_POW_IN_SUM_W)) is not None:
+        state.input_watts = round(float(v), 1)
+    if (v := fields.get(F_POW_OUT_SUM_W)) is not None:
+        state.output_watts = round(float(v), 1)
+    if (v := fields.get(F_POW_GET_QCUSB1)) is not None:
+        state.usb_output_watts = round(abs(float(v)), 1)
+    if (v := fields.get(F_POW_GET_TYPEC1)) is not None:
+        state.usbc_output_watts = round(abs(float(v)), 1)
 
-        The DELTA 3 does not include every field in every frame -- notably the
-        AC-charger flag (field 202) is often absent -- so we only require SoC to
-        start publishing. AC presence falls back to AC input watts when the flag
-        has not been seen yet (see ``nut_writer.derive_status``).
-        """
-        return self.soc_percent is not None
+    if (v := fields.get(F_PLUG_IN_INFO_AC_CHARGER_FLAG)) is not None:
+        state.ac_input_present = bool(v)
+    if (v := fields.get(F_FLOW_INFO_AC_OUT)) is not None:
+        state.ac_output_on = bool(v)
 
-    def merge_display_payload(self, payload: bytes) -> None:
-        """Merge a DisplayPropertyUpload protobuf payload into this state."""
-        fields = protocol.decode_message(payload)
+    if (v := fields.get(F_CMS_CHG_REM_TIME)) is not None:
+        state.remain_charge_minutes = int(v)
+    if (v := fields.get(F_CMS_DSG_REM_TIME)) is not None:
+        state.remain_discharge_minutes = int(v)
+    if (v := fields.get(F_ERRCODE)) is not None:
+        state.error_code = int(v)
 
-        if (v := fields.get(F_CMS_BATT_SOC)) is not None:
-            self.soc_percent = round(float(v), 1)
-        elif (v := fields.get(F_BMS_BATT_SOC)) is not None:
-            self.soc_percent = round(float(v), 1)
 
-        if (v := fields.get(F_POW_GET_AC_IN)) is not None:
-            self.ac_input_watts = round(float(v), 1)
-        if (v := fields.get(F_POW_GET_AC_OUT)) is not None:
-            # AC output is reported negative; expose it as a positive load.
-            self.ac_output_watts = round(abs(float(v)), 1)
-        if (v := fields.get(F_POW_IN_SUM_W)) is not None:
-            self.input_watts = round(float(v), 1)
-        if (v := fields.get(F_POW_OUT_SUM_W)) is not None:
-            self.output_watts = round(float(v), 1)
-        if (v := fields.get(F_POW_GET_QCUSB1)) is not None:
-            self.usb_output_watts = round(abs(float(v)), 1)
-        if (v := fields.get(F_POW_GET_TYPEC1)) is not None:
-            self.usbc_output_watts = round(abs(float(v)), 1)
-
-        if (v := fields.get(F_PLUG_IN_INFO_AC_CHARGER_FLAG)) is not None:
-            self.ac_input_present = bool(v)
-        if (v := fields.get(F_FLOW_INFO_AC_OUT)) is not None:
-            self.ac_output_on = bool(v)
-
-        if (v := fields.get(F_CMS_CHG_REM_TIME)) is not None:
-            self.remain_charge_minutes = int(v)
-        if (v := fields.get(F_CMS_DSG_REM_TIME)) is not None:
-            self.remain_discharge_minutes = int(v)
-        if (v := fields.get(F_ERRCODE)) is not None:
-            self.error_code = int(v)
-
-    def is_display_packet(self, packet: Packet) -> bool:
-        return (
-            packet.src == DISPLAY_SRC
-            and packet.cmd_set == DISPLAY_CMD_SET
-            and packet.cmd_id == DISPLAY_CMD_ID
-        )
+def is_display_packet(packet: Packet) -> bool:
+    return (
+        packet.src == DISPLAY_SRC
+        and packet.cmd_set == DISPLAY_CMD_SET
+        and packet.cmd_id == DISPLAY_CMD_ID
+    )
 
 
 def _config_packet(field_number: int, enabled: bool) -> Packet:
@@ -153,3 +136,41 @@ def set_usb_enabled_packet(enabled: bool) -> Packet:
 def set_dc_enabled_packet(enabled: bool) -> Packet:
     """Build a ConfigWrite packet to toggle 12V DC output."""
     return _config_packet(CFG_DC_12V_OUT_OPEN, enabled)
+
+
+@dataclass(frozen=True, slots=True)
+class Delta3Driver:
+    """The DELTA 3 (``pd335``) protocol as a device driver."""
+
+    name: str = "delta3"
+    packet_version: int = 3
+    # The captured frames in tests/data carry a non-zero seq[0] and only decode
+    # to sensible telemetry once de-obfuscated, so this family does XOR.
+    xor_payload: bool = True
+
+    def handle_packet(self, state: DeviceState, packet: Packet) -> bool:
+        if not is_display_packet(packet):
+            return False
+        merge_display_payload(state, packet.payload)
+        return True
+
+    def output_packet(self, kind: str, enabled: bool) -> Packet:
+        if kind == "ac":
+            return set_ac_enabled_packet(enabled)
+        if kind == "usb":
+            return set_usb_enabled_packet(enabled)
+        if kind == "dc":
+            return set_dc_enabled_packet(enabled)
+        raise ValueError(f"unknown output: {kind}")
+
+    def set_ac_enabled_packet(self, enabled: bool) -> Packet:
+        return set_ac_enabled_packet(enabled)
+
+    def set_usb_enabled_packet(self, enabled: bool) -> Packet:
+        return set_usb_enabled_packet(enabled)
+
+    def set_dc_enabled_packet(self, enabled: bool) -> Packet:
+        return set_dc_enabled_packet(enabled)
+
+
+DRIVER = Delta3Driver()

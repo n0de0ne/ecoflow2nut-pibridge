@@ -1,16 +1,28 @@
-# EcoFlow DELTA 3 NUT bridge configuration.
+# EcoFlow NUT bridge configuration.
 # Copy to config.yaml and edit for your device.
 
 ecoflow:
-  # BLE MAC address of your DELTA 3 (find with: bluetoothctl scan on).
+  # BLE MAC address of your power station (find it with: ecoflow-nut scan).
   mac: "AA:BB:CC:DD:EE:FF"
   # Serial number, printed on the unit / shown in the EcoFlow app.
-  serial: "P231XXXXXXXXXXXX"
-  model: "delta3"
+  serial: "R351XXXXXXXXXXXX"
+
+  # Which protocol the device speaks. EcoFlow ships two incompatible
+  # generations, so this must match the hardware:
+  #
+  #   delta2max  DELTA 2 Max (2048 Wh / 2400 W), serial R351/R354, BLE EF-R35…
+  #   delta2     DELTA 2 (R331/R335), DELTA 2 Black (R701), DELTA 3 1500 (D361/D365)
+  #   delta3     DELTA 3 / DELTA 3 Plus / River 3 (P231…), BLE EF-D3…
+  #
+  # Spelling is forgiving ("DELTA 2 Max", "delta-2-max" and the serial prefix
+  # all work). Selection is by THIS setting, not by sniffing the serial number,
+  # so a regional or newer revision whose prefix nothing recognises still works
+  # -- just name the generation it belongs to.
+  model: "delta2max"
   poll_interval_seconds: 5
 
   # Encryption handshake. "auto" reads the type from the BLE advertisement.
-  # The DELTA 3 uses the encrypted ECDH handshake (type 7), which needs a
+  # Modern units use the encrypted ECDH handshake (type 7), which needs a
   # one-time EcoFlow account user_id (see README "Authentication"). This is used
   # ONLY to derive the local BLE session secret -- no telemetry goes via cloud.
   encrypt_type: "auto"
@@ -25,15 +37,24 @@ ble:
 nut:
   device_name: "ecoflow"
   dev_file_path: "/var/run/nut/ecoflow.dev"
-  battery_capacity_wh: 1024
-  realpower_nominal: 1800
+  # Rated pack capacity and AC output for YOUR model -- these drive the runtime
+  # estimate and ups.load. DELTA 2 Max: 2048 / 2400. DELTA 2: 1024 / 1800.
+  # DELTA 3: 1024 / 1800.
+  battery_capacity_wh: 2048
+  realpower_nominal: 2400
   battery_warning_percent: 35
   battery_runtime_low_seconds: 300
   battery_type: "LiFePO4"
   battery_voltage_nominal: 51.2
   input_transfer_low: 200
   input_transfer_high: 250
+  # Fallback "mains present" rule for models that do not measure input voltage
+  # (the DELTA 3): AC counts as present only above this many watts of draw.
   ac_input_present_min_watts: 10
+  # Preferred rule where the device does measure it (the DELTA 2 generation):
+  # mains are present above this many volts. Unlike watts this stays true on a
+  # full battery with an idle load, so it will not report a false outage.
+  ac_input_present_min_volts: 50
   thresholds:
     low_battery_percent: 25       # triggers OB LB
     critical_battery_percent: 10  # reserved for future auto-cut logic
@@ -43,8 +64,8 @@ nut:
     output_voltage: 230
     output_frequency: 50
     manufacturer: "EcoFlow"
-    model: "DELTA 3"
-    serial: "P231XXXXXXXXXXXX"
+    model: "DELTA 2 Max"
+    serial: "R351XXXXXXXXXXXX"
 
 logging:
   level: "INFO"
@@ -107,8 +128,9 @@ pricing:
 # startup). Lives in the systemd StateDirectory so it survives restarts.
 settings_file: "/var/lib/ecoflow-nut/settings.json"
 
-# Optional auto-shutdown: cut the DELTA 3's output when the battery is critically
-# low while on battery. DISABLED by default -- cutting output is destructive.
+# Optional auto-shutdown: cut the power station's output when the battery is
+# critically low while on battery. DISABLED by default -- cutting output is
+# destructive.
 # The grace period lets NUT clients (Unraid/Synology) finish their own shutdown,
 # triggered by the OB LB status, before the inverter is cut.
 auto_shutdown:
@@ -132,7 +154,7 @@ auto_shutdown:
 
 # Optional downstream HomeKit-over-BLE outlet (e.g. an Eve Energy, BLE/non-Thread).
 # DISABLED by default. Lets a SINGLE load (e.g. an Unraid server) be shed on
-# critical battery while the DELTA 3's other AC sockets (router / fibre ONT) stay
+# critical battery while the station's other AC sockets (router / fibre ONT) stay
 # powered -- the EcoFlow AC toggle is all-or-nothing, this gives per-load control.
 # Requires the [eve] extra:  pip install ecoflow-nut-bridge[eve]
 #
@@ -144,7 +166,7 @@ auto_shutdown:
 eve:
   enabled: false
   device_id: ""                 # HomeKit accessory id (from 'eve discover')
-  # Prefer a SEPARATE BT dongle from the DELTA 3 link to avoid stalling telemetry.
+  # Prefer a SEPARATE BT dongle from the EcoFlow link to avoid stalling telemetry.
   adapter: "hci1"
   pairing_file: "/var/lib/ecoflow-nut/eve-pairing.json"
   setup_code: ""                # 8-digit HomeKit code, e.g. "123-45-678" (pairing only)

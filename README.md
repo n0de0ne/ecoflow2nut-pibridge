@@ -2,12 +2,16 @@
 
 *🇬🇧 English · [🇫🇷 Français](README.fr.md)*
 
-Expose an **EcoFlow DELTA 3** portable power station as a standard
+Expose an **EcoFlow portable power station** as a standard
 **NUT (Network UPS Tools)** UPS over Bluetooth Low Energy. The bridge polls the
-DELTA 3 over BLE, translates its telemetry (state of charge, AC input/output
+station over BLE, translates its telemetry (state of charge, AC input/output
 watts, AC-input-present) into NUT variables, writes a `dummy-ups` state file and
 runs `upsd` on port 4141 — so any NUT client (Unraid's built-in client,
-Synology, `upsc`, …) can monitor the DELTA 3 as if it were a normal UPS.
+Synology, `upsc`, …) can monitor it as if it were a normal UPS.
+
+Both EcoFlow BLE protocol generations are supported — the **DELTA 2** family
+(DELTA 2, **DELTA 2 Max**, DELTA 2 Black, DELTA 3 1500) and the **DELTA 3**
+family (DELTA 3, DELTA 3 Plus, River 3) — selected with one config setting.
 
 > ⚠️ **Disclaimer.** This project is **not affiliated with, authorized, or
 > endorsed by EcoFlow**. It speaks an undocumented BLE protocol reconstructed by
@@ -33,7 +37,7 @@ Synology, `upsc`, …) can monitor the DELTA 3 as if it were a normal UPS.
 
 ## 1. What it does
 
-A single async daemon connects to the DELTA 3 over BLE, polls state every few
+A single async daemon connects to the power station over BLE, polls state every few
 seconds, derives NUT `ups.status` / `battery.charge` / `ups.load` / runtime, and
 keeps a `dummy-ups` `.dev` file fresh. The NUT `dummy-ups` driver re-reads that
 file and `upsd` serves it on 4141. The same Python code runs unchanged in a
@@ -45,7 +49,7 @@ outputs — as Python functions and a small CLI. An optional, opt-in
 **auto-shutdown** policy can cut AC output when the battery is critically low
 (see [Auto-shutdown](#auto-shutdown)); it is disabled by default. For per-load
 control it can also drive a downstream **HomeKit-over-BLE outlet** (e.g. an Eve
-Energy) — shedding a single device while the DELTA 3's other AC sockets stay
+Energy) — shedding a single device while the station's other AC sockets stay
 powered (see [Per-load shedding](#per-load-shedding-with-a-homekit-outlet)).
 
 ## 2. Disclaimer
@@ -56,33 +60,72 @@ the read path (SoC + AC status) is prioritised over feature completeness.**
 
 ## 3. Hardware support
 
+EcoFlow ships **two incompatible BLE protocol generations**. Both are
+implemented; pick one with `ecoflow.model` in `config.yaml`.
+
+| `model` | Devices | Serial prefix | BLE name | Wire protocol |
+|---------|---------|---------------|----------|---------------|
+| `delta2max` | **DELTA 2 Max** (2048 Wh, 2400 W AC) | `R351`, `R354` | `EF-R35…` | V2 frames, fixed-width structs |
+| `delta2` | DELTA 2, DELTA 2 Black, DELTA 3 1500 | `R331`/`R335`, `R701`, `D361`/`D365` | `EF-R33…` | V2 frames, fixed-width structs |
+| `delta3` | DELTA 3 (1024 Wh, 1800 W AC), DELTA 3 Plus, River 3 | `P231` | `EF-D3…` | V3 frames, protobuf (`pd335`) |
+
 | Item | Detail |
 |------|--------|
-| Confirmed device | EcoFlow **DELTA 3** (1024 Wh, 1800 W AC), serial prefix `P231`, BLE name `EF-D3` |
-| Protocol family | `pd335` (modern encrypted protobuf BLE protocol) |
 | Test host | Unraid + Realtek RTL8821CU USB BT dongle (BlueZ) |
 | Production host | Raspberry Pi Zero 2W, Raspberry Pi OS Lite 64-bit, integrated BT |
 
-Other EcoFlow models in the same family (DELTA 3 Plus/Max, River 3, …) use the
-same framing and protobuf field numbers and will likely work with adjusted
-config, but only the DELTA 3 is targeted here.
+Model spelling is forgiving — `"DELTA 2 Max"`, `"delta-2-max"`, `"delta2max"`
+and the serial prefix `"R351"` all select the same driver.
 
-> ### Protocol note — DELTA 3 ≠ DELTA 2
-> The DELTA **2** uses an older *plaintext* BLE protocol with fixed byte offsets.
-> The DELTA **3** uses the newer **encrypted, protobuf-based** protocol
-> (`DisplayPropertyUpload` / `ConfigWrite` messages over a V3 frame with CRC8 +
-> CRC16 and an XOR-deobfuscated payload). This bridge implements the **DELTA 3**
-> protocol. The read/decode path is unit-tested against **real captured frames**
-> from a sibling device that shares identical protobuf field numbers.
+> ### Your serial prefix is not on the list?
+> **Set `model` to the generation anyway.** Selection is by configuration, not by
+> sniffing the serial number. Other integrations gate on a hardcoded prefix list,
+> so a regional variant or a newer hardware revision gets rejected as an
+> "unsupported device" even when it speaks a protocol they already implement —
+> this bridge has no such gate. Confirm the guess with
+> [`ecoflow-nut sniff`](#verifying-an-unlisted-device).
+
+> ### Protocol note — DELTA 2 ≠ DELTA 3
+> The **DELTA 2 generation** sends telemetry as packed little-endian C structs,
+> one per subsystem (PD / EMS / BMS / inverter / MPPT), identified by the frame's
+> `(src, cmd_set, cmd_id)` — there are no field tags in the payload. Control is a
+> per-function `cmd_id` with a small raw payload.
+>
+> The **DELTA 3 generation** sends a protobuf `DisplayPropertyUpload` and takes a
+> single `ConfigWrite` message, over a two-bytes-longer V3 frame.
+>
+> They share only the CRC8/CRC16 framing and the authentication handshake. Full
+> details, field tables and verification status: [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
 > ### Authentication
-> The DELTA 3 negotiates an encrypted session (`encrypt_type 7`, ECDH). The final
+> Modern units negotiate an encrypted session (`encrypt_type 7`, ECDH). The final
 > authentication step hashes `md5(user_id + serial)`, where `user_id` is your
 > EcoFlow account user id. This id is used **only once, locally, to derive the
 > BLE session secret** — no telemetry or control traffic goes through the cloud.
 > Obtain it once (e.g. via the EcoFlow login API or app diagnostics) and set it
 > as `ecoflow.user_id` in the config. If your unit advertises `encrypt_type 0`
 > or `1`, no `user_id` is required. See [Troubleshooting](#8-troubleshooting).
+
+### Verifying an unlisted device
+
+Two diagnostics identify a device and confirm the driver guess without touching
+the daemon:
+
+```bash
+# 1. Find the MAC, the advertised name (which encodes the model) and encrypt_type.
+ecoflow-nut scan
+
+# 2. Connect and dump every frame the device sends, decoded against the
+#    configured model's layouts. Compare the values with the unit's own screen.
+ecoflow-nut sniff --seconds 60
+
+# 3. Keep a full capture for offline analysis / bug reports.
+ecoflow-nut sniff --out frames.jsonl
+```
+
+`sniff` reports **every** frame, including ones no driver claims, and flags any
+payload that is shorter or longer than the layout expects — which is how you
+tell "wrong generation configured" from "right generation, firmware variant".
 
 ## 4. Quick start (Docker on Unraid)
 
@@ -155,7 +198,7 @@ Raspberry Pi OS runs `bluetoothd` by default, so BLE works without extra setup
 (unlike the bare Unraid host). Watch progress with `journalctl -u
 ecoflow-nut-bridge -f` — look for `ble.authenticated` then `state.updated`.
 
-> The Pi is powered from the DELTA 3's own USB-A port, so keep `auto_shutdown.cut_usb`
+> The Pi is powered from the station's own USB-A port, so keep `auto_shutdown.cut_usb`
 > at its default `false` — cutting USB would kill the bridge itself.
 
 ## 6. Configuration reference
@@ -164,8 +207,9 @@ Full annotated example: [`config/config.example.yaml`](config/config.example.yam
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `ecoflow.mac` | — (required) | BLE MAC of the DELTA 3 |
+| `ecoflow.mac` | — (required) | BLE MAC of the power station (find it with `ecoflow-nut scan`) |
 | `ecoflow.serial` | — | Device serial (used for auth + reported to NUT) |
+| `ecoflow.model` | `delta3` | Protocol driver: `delta2max`, `delta2` or `delta3` (see [Hardware support](#3-hardware-support)) |
 | `ecoflow.poll_interval_seconds` | `5` | How often the NUT file is refreshed from the latest state |
 | `ecoflow.encrypt_type` | `auto` | `auto` reads it from the advertisement; or force `0`/`1`/`7` |
 | `ecoflow.user_id` | `""` | EcoFlow account user id, required for `encrypt_type 7` |
@@ -173,7 +217,10 @@ Full annotated example: [`config/config.example.yaml`](config/config.example.yam
 | `ble.connect_timeout_seconds` | `30` | BLE connect timeout |
 | `ble.reconnect_backoff_max_seconds` | `60` | Max exponential reconnect backoff |
 | `nut.dev_file_path` | `/var/run/nut/ecoflow.dev` | dummy-ups state file (must match `ups.conf`) |
-| `nut.battery_capacity_wh` | `1024` | Pack capacity for runtime estimate |
+| `nut.battery_capacity_wh` | `1024` | Pack capacity for runtime estimate — set to your model's rating (DELTA 2 Max: `2048`) |
+| `nut.realpower_nominal` | `1800` | Rated AC output, used to derive `ups.load` percent (DELTA 2 Max: `2400`) |
+| `nut.ac_input_present_min_watts` | `10` | Fallback "mains present" threshold for models that do not measure input voltage |
+| `nut.ac_input_present_min_volts` | `50` | "Mains present" threshold where the device measures input voltage (DELTA 2 generation) |
 | `nut.thresholds.low_battery_percent` | `25` | SoC below this → `OB LB` |
 | `nut.thresholds.critical_battery_percent` | `10` | Informational; auto-cut uses `auto_shutdown.trigger_soc_percent` |
 | `nut.static_values.*` | — | Nameplate values reported verbatim (voltage, frequency, mfr, model, serial) |
@@ -184,12 +231,12 @@ Full annotated example: [`config/config.example.yaml`](config/config.example.yam
 | `auto_shutdown.grace_period_seconds` | `300` | Delay after arming (SoC trigger) before cutting |
 | `auto_shutdown.min_load_watts` | `null` | Low-load trigger: cut when AC output stays ≤ this (on battery, any SoC). `null` disables |
 | `auto_shutdown.load_grace_seconds` | `60` | Debounce for the low-load trigger |
-| `auto_shutdown.cut_ac` / `cut_usb` / `cut_dc` | `true`/`false`/`false` | Which DELTA 3 outputs to cut |
+| `auto_shutdown.cut_ac` / `cut_usb` / `cut_dc` | `true`/`false`/`false` | Which station outputs to cut |
 | `auto_shutdown.cut_eve` | `false` | Also cut a downstream HomeKit-over-BLE outlet (see [Per-load shedding](#per-load-shedding-with-a-homekit-outlet)) |
 | `auto_shutdown.restore_on_recovery` | `false` | Re-enable cut outputs when power/SoC recovers |
 | `eve.enabled` | `false` | Master switch for the HomeKit-over-BLE outlet |
 | `eve.device_id` | `""` | HomeKit accessory id (from `eve discover`) |
-| `eve.adapter` | `hci1` | Bluetooth adapter for the outlet — ideally a **separate** dongle from the DELTA 3 |
+| `eve.adapter` | `hci1` | Bluetooth adapter for the outlet — ideally a **separate** dongle from the EcoFlow link |
 | `eve.pairing_file` | `/var/lib/ecoflow-nut/eve-pairing.json` | Where aiohomekit pairing data is persisted |
 | `eve.setup_code` | `""` | 8-digit HomeKit code (e.g. `123-45-678`), needed only to pair |
 | `switchbot.enabled` | `false` | Master switch for the SwitchBot Bot (manual power-button presser) |
@@ -212,7 +259,7 @@ triggers** (either can fire, both only while on battery) arm a cut:
   debounce. Disabled unless `min_load_watts` is set.
 
 `cut_usb`/`cut_dc` are available but default off; **never enable `cut_usb` if the
-bridge host is powered from the DELTA 3's USB port.**
+bridge host is powered from the station's USB port.**
 
 This complements — does not replace — normal NUT behaviour: clients shut
 themselves down from `ups.status` (`OB LB`); auto-shutdown additionally protects
@@ -220,7 +267,7 @@ the pack by cutting output after they've gone down.
 
 ### Per-load shedding with a HomeKit outlet
 
-The DELTA 3's AC output is a **single, all-or-nothing bank** — `set_ac_enabled`
+The station's AC output is a **single, all-or-nothing bank** — the AC toggle
 switches every AC socket at once. To shed **one** load while keeping the others
 live, the bridge can drive a downstream **HomeKit-over-BLE smart outlet** (e.g. an
 Eve Energy, the BLE / non-Thread model) as an independent cut target. The bridge
@@ -231,8 +278,8 @@ involved.
 > Install the extra: `pip install ecoflow-nut-bridge[eve]`
 
 **Motivating example — keep the network up, shed the server.** Plug the router /
-fibre ONT straight into the DELTA 3's AC sockets, and plug an Unraid server into
-the Eve outlet (which is itself on a DELTA 3 socket). On a grid outage you want
+fibre ONT straight into the station's AC sockets, and plug an Unraid server into
+the Eve outlet (which is itself on a station socket). On a grid outage you want
 Unraid to shut down cleanly and then *fully drop* so the small network load runs
 on the remaining battery for as long as possible; when grid power returns, Unraid
 should power back up:
@@ -242,7 +289,7 @@ auto_shutdown:
   enabled: true
   min_load_watts: 30           # set ABOVE network-only draw, BELOW network+idle-Unraid
   load_grace_seconds: 60
-  cut_ac: false                # keep the DELTA 3 AC bank ON (router/fibre stay up)
+  cut_ac: false                # keep the station's AC bank ON (router/fibre stay up)
   cut_usb: false
   cut_dc: false
   cut_eve: true                # the only thing we cut is the Unraid outlet
@@ -250,12 +297,12 @@ auto_shutdown:
 eve:
   enabled: true
   device_id: "AA:BB:CC:11:22:33"
-  adapter: "hci1"              # a SECOND BT dongle; keep hci0 for the DELTA 3
+  adapter: "hci1"              # a SECOND BT dongle; keep hci0 for the EcoFlow
 ```
 
 How it plays out, driven entirely by the existing **low-load trigger**:
 
-1. Grid fails → DELTA 3 switches to battery → NUT publishes `OB`, then `OB LB`
+1. Grid fails → the station switches to battery → NUT publishes `OB`, then `OB LB`
    at the low-battery threshold → Unraid shuts itself down gracefully (NUT client).
 2. Once Unraid halts, total AC draw collapses below `min_load_watts`; after
    `load_grace_seconds` the bridge turns the **Eve outlet off** — the router /
@@ -286,7 +333,7 @@ sudo install -d -o ecoflow -g nut /var/lib/ecoflow-nut
 
 Then discover, pair and verify. On a **single-radio** host (no second dongle,
 `eve.adapter: hci0`), **stop the bridge first** — pairing does a heavy scan that
-would fight the live DELTA 3 link; once paired, day-to-day control coexists fine:
+would fight the live EcoFlow link; once paired, day-to-day control coexists fine:
 
 ```bash
 EVE='sudo -u ecoflow /opt/ecoflow-nut-bridge/.venv/bin/ecoflow-nut --config /etc/ecoflow-nut/config.yaml'
@@ -311,7 +358,7 @@ device id is matched case-insensitively, so either case works in the config.
 > **`paired`** flag — handy to tell "not advertising" apart from "still paired to
 > Apple Home" if `discover` comes back empty.
 
-> **Bluetooth radios.** The DELTA 3 link is a persistent, latency-sensitive BLE
+> **Bluetooth radios.** The EcoFlow link is a persistent, latency-sensitive BLE
 > session. The bridge talks to the outlet **on demand** (connect → write →
 > disconnect), so on a shared single adapter (`eve.adapter: hci0`) the EcoFlow
 > link is only briefly perturbed during an actual cut/restore (you may see one
@@ -389,7 +436,7 @@ ecoflow-nut --config config.yaml eve on         # toggle outlet (also: off / sta
 Unlike `ac`/`usb`/`dc`, the `eve` commands connect to the outlet directly (its
 own BLE accessory), so don't run one concurrently with a dashboard toggle.
 
-The DELTA 3 allows only **one** BLE connection at a time, so the `ac`/`usb`/`dc`
+The station allows only **one** BLE connection at a time, so the `ac`/`usb`/`dc`
 commands talk to the **running daemon** over a local control socket
 (`control_socket_path`) and it sends the command on its existing connection —
 no need to stop the bridge. If no daemon is running, the CLI falls back to
@@ -456,7 +503,7 @@ It also provides:
   (`/var/lib/ecoflow-nut/settings.json`), which is overlaid back onto the YAML
   at the next startup. Edits require the control token.
 * **USB-off guard** — turning the USB output off pops a confirmation, since the
-  bridge host (a Pi) is often powered from the DELTA 3's USB port.
+  bridge host (a Pi) is often powered from the station's USB port.
 * **Hover detail** — the history chart shows the exact SoC / AC-in / AC-out
   values (and local time) at the point under your cursor.
 * **Energy & cost** — when history logging is on, an Energy panel reports grid
@@ -580,7 +627,7 @@ upsc ecoflow@<bridge-host>:4141 battery.charge
 
 **BLE: device not found during scan.**
 Confirm the MAC with `bluetoothctl` → `scan on`. Ensure only one thing talks to
-the DELTA 3 at a time — the EcoFlow phone app holds the BLE connection
+the station at a time — the EcoFlow phone app holds the BLE connection
 exclusively, so close it. On Docker you need `privileged: true` and the
 `/var/run/dbus` mount.
 
@@ -619,13 +666,13 @@ and AC status appear within a few seconds of connecting.
 
 ```
                           ┌──────────────────────── bridge host (Pi / Unraid) ───┐
-   EcoFlow DELTA 3        │                                                       │
+  EcoFlow power station   │                                                       │
   ┌───────────────┐  BLE  │  ┌────────────────────┐    writes    ┌─────────────┐ │
-  │  pd335 fw     │◀─────▶│  │  ecoflow-nut daemon │ ───────────▶ │ ecoflow.dev │ │
-  │ DisplayProp.  │ GATT  │  │  • bleak transport  │  (dummy-ups  │  state file │ │
-  │ ConfigWrite   │ 0002/ │  │  • V3 frame + CRC   │   format)    └──────┬──────┘ │
-  └───────────────┘ 0003  │  │  • protobuf decode  │                     │ reads  │
-                          │  │  • NUT translation  │              ┌──────▼──────┐ │
+  │ DELTA 2 gen:  │◀─────▶│  │  ecoflow-nut daemon │ ───────────▶ │ ecoflow.dev │ │
+  │  V2 + structs │ GATT  │  │  • bleak transport  │  (dummy-ups  │  state file │ │
+  │ DELTA 3 gen:  │ 0002/ │  │  • V2/V3 framing    │   format)    └──────┬──────┘ │
+  │  V3 + protobuf│ 0003  │  │  • model driver     │                     │ reads  │
+  └───────────────┘       │  │  • NUT translation  │              ┌──────▼──────┐ │
                           │  └────────────────────┘              │ dummy-ups   │ │
                           │                                       │   driver    │ │
                           │                                       └──────┬──────┘ │

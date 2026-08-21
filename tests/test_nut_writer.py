@@ -3,7 +3,6 @@
 import pytest
 
 from ecoflow_nut.config import NutConfig
-from ecoflow_nut.delta3 import DeviceState
 from ecoflow_nut.nut_writer import (
     NutWriter,
     build_variables,
@@ -11,6 +10,7 @@ from ecoflow_nut.nut_writer import (
     estimate_runtime_seconds,
     render,
 )
+from ecoflow_nut.state import DeviceState
 
 
 @pytest.fixture
@@ -45,6 +45,38 @@ def test_status_infers_ac_from_watts_when_flag_absent(nut):
     # The DELTA 3 omits the AC-charger flag in many frames; fall back to watts.
     state = DeviceState(soc_percent=80, ac_input_present=None, ac_input_watts=300)
     assert derive_status(state, nut) == "OL"
+
+
+def test_status_online_on_measured_mains_even_with_no_draw(nut):
+    """The regression a watts-only rule causes on a DELTA 2 Max.
+
+    A full battery with an idle load draws ~0 W from the mains. Judging on watts
+    alone would call that an outage and start shutting NUT clients down, so a
+    model that measures input voltage must be believed over the wattage.
+    """
+    state = DeviceState(soc_percent=100, ac_input_watts=0, ac_input_voltage=230.4)
+    assert derive_status(state, nut) == "OL"
+
+
+def test_status_on_battery_when_measured_mains_collapse(nut):
+    state = DeviceState(soc_percent=80, ac_input_watts=0, ac_input_voltage=0.0)
+    assert derive_status(state, nut) == "OB"
+
+
+def test_status_ignores_stale_charger_flag_when_voltage_is_measured(nut):
+    # Voltage is the ground truth; a lingering charger flag must not override it.
+    state = DeviceState(
+        soc_percent=80, ac_input_present=True, ac_input_watts=200, ac_input_voltage=0.0
+    )
+    assert derive_status(state, nut) == "OB"
+
+
+def test_input_voltage_variable_reports_the_measurement_when_available(nut):
+    live = build_variables(DeviceState(soc_percent=50, ac_input_voltage=228.6), nut)
+    assert live["input.voltage"] == "228.6"
+    # Models that do not measure it keep publishing the configured nominal.
+    static = build_variables(DeviceState(soc_percent=50), nut)
+    assert static["input.voltage"] == str(nut.static_values.input_voltage)
 
 
 def test_state_complete_with_soc_only():

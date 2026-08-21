@@ -66,6 +66,10 @@ class NutConfig:
     input_transfer_low: int = 200
     input_transfer_high: int = 250
     ac_input_present_min_watts: int = 10
+    # Volts at the AC input above which the mains count as present, on models
+    # that measure it (the DELTA 2 generation). Well below any nominal supply
+    # (100/120/230 V) and well above sensor noise.
+    ac_input_present_min_volts: int = 50
     thresholds: NutThresholds = field(default_factory=NutThresholds)
     static_values: NutStaticValues = field(default_factory=NutStaticValues)
 

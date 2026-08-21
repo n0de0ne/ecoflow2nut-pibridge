@@ -27,7 +27,7 @@ import structlog
 
 from .config import SqliteConfig
 from .db import _METRIC_COLUMNS, _ident
-from .delta3 import DeviceState
+from .state import DeviceState
 
 log = structlog.get_logger(__name__)
 

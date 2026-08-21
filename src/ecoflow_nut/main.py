@@ -1,4 +1,4 @@
-"""Daemon: poll the DELTA 3 over BLE and keep the NUT dummy-ups file fresh."""
+"""Daemon: poll the power station over BLE and keep the NUT dummy-ups file fresh."""
 
 from __future__ import annotations
 
@@ -12,14 +12,15 @@ from pathlib import Path
 
 import structlog
 
-from . import delta3, pricing, settings_store
+from . import devices, pricing, settings_store
 from .autoshutdown import AutoShutdownController, ShutdownAction
 from .ble_client import EcoFlowBLE
 from .config import Config, load_config
-from .delta3 import DeviceState
+from .devices import OUTPUT_KINDS, DeviceDriver
 from .eve_outlet import EveOutlet
 from .nut_writer import NutWriter
 from .settings_store import SettingsStore
+from .state import DeviceState
 from .switchbot import SwitchBot
 
 log = structlog.get_logger(__name__)
@@ -36,25 +37,13 @@ def seed_state() -> DeviceState:
     )
 
 
-# Output command builders shared by the control socket and the auto-shutdown path.
-OUTPUT_BUILDERS = {
-    "ac": delta3.set_ac_enabled_packet,
-    "usb": delta3.set_usb_enabled_packet,
-    "dc": delta3.set_dc_enabled_packet,
-}
-
-
 def parse_control_command(line: str) -> tuple[str, bool]:
     """Parse a control line like ``ac off`` into ``("ac", False)``.
 
     Raises ValueError on anything that is not ``<ac|usb|dc> <on|off>``.
     """
     parts = line.strip().lower().split()
-    if (
-        len(parts) != 2
-        or parts[0] not in OUTPUT_BUILDERS
-        or parts[1] not in ("on", "off")
-    ):
+    if len(parts) != 2 or parts[0] not in OUTPUT_KINDS or parts[1] not in ("on", "off"):
         raise ValueError("usage: <ac|usb|dc> <on|off>")
     return parts[0], parts[1] == "on"
 
@@ -86,6 +75,8 @@ class Daemon:
         # Overlay any persisted live-edited settings before building subsystems.
         self._settings = SettingsStore(config.settings_file)
         self._settings.load_into(config)
+        # Protocol driver for the configured model; raises on an unknown model.
+        self._driver: DeviceDriver = devices.get_driver(config.ecoflow.model)
         self._writer = NutWriter(config.nut)
         self._stop = asyncio.Event()
         self._last_write_monotonic = time.monotonic()
@@ -266,6 +257,7 @@ class Daemon:
             **eve,
             "soc_percent": s.soc_percent,
             "ac_input_watts": s.ac_input_watts,
+            "ac_input_voltage": s.ac_input_voltage,
             "ac_output_watts": s.ac_output_watts,
             "usb_output_watts": s.usb_output_watts,
             "usbc_output_watts": s.usbc_output_watts,
@@ -336,12 +328,12 @@ class Daemon:
 
     async def control_output(self, kind: str, enabled: bool) -> str:
         """Send an output toggle over the live BLE connection. Raises on failure."""
-        if kind not in OUTPUT_BUILDERS:
+        if kind not in OUTPUT_KINDS:
             raise ValueError(f"unknown output: {kind}")
         client = self._active_client
         if client is None or not client.is_connected:
             raise RuntimeError("not connected to device")
-        await client.send_command_packet(OUTPUT_BUILDERS[kind](enabled))
+        await client.send_command_packet(self._driver.output_packet(kind, enabled))
         log.info("control.command", output=kind, enabled=enabled)
         return f"{kind} {'on' if enabled else 'off'}"
 
@@ -528,11 +520,11 @@ class Daemon:
         client = self._active_client
         packets = []
         if cfg.cut_ac:
-            packets.append(delta3.set_ac_enabled_packet(enabled))
+            packets.append(self._driver.output_packet("ac", enabled))
         if cfg.cut_usb:
-            packets.append(delta3.set_usb_enabled_packet(enabled))
+            packets.append(self._driver.output_packet("usb", enabled))
         if cfg.cut_dc:
-            packets.append(delta3.set_dc_enabled_packet(enabled))
+            packets.append(self._driver.output_packet("dc", enabled))
         if packets and client is None:
             log.error("auto_shutdown.no_client", note="cannot send EcoFlow command")
 

@@ -2,13 +2,17 @@
 
 *[🇬🇧 English](README.md) · 🇫🇷 Français*
 
-Expose une station d'énergie portable **EcoFlow DELTA 3** comme un onduleur
+Expose une **station d'énergie portable EcoFlow** comme un onduleur
 **NUT (Network UPS Tools)** standard, via Bluetooth Low Energy. Le pont interroge
-la DELTA 3 en BLE, traduit sa télémétrie (niveau de charge, watts d'entrée/sortie
+la station en BLE, traduit sa télémétrie (niveau de charge, watts d'entrée/sortie
 AC, présence de l'alimentation secteur) en variables NUT, écrit un fichier d'état
 `dummy-ups` et lance `upsd` sur le port 4141 — n'importe quel client NUT (client
-intégré Unraid, Synology, `upsc`, …) peut alors surveiller la DELTA 3 comme un
-onduleur classique.
+intégré Unraid, Synology, `upsc`, …) peut alors la surveiller comme un onduleur
+classique.
+
+Les **deux générations** de protocole BLE d'EcoFlow sont supportées — la famille
+**DELTA 2** (DELTA 2, **DELTA 2 Max**, DELTA 2 Black, DELTA 3 1500) et la famille
+**DELTA 3** (DELTA 3, DELTA 3 Plus, River 3) — au choix via un seul réglage.
 
 > ⚠️ **Avertissement.** Ce projet **n'est ni affilié, ni autorisé, ni approuvé
 > par EcoFlow**. Il utilise un protocole BLE non documenté, reconstitué par la
@@ -34,7 +38,7 @@ onduleur classique.
 
 ## 1. Ce que ça fait
 
-Un seul démon asynchrone se connecte à la DELTA 3 en BLE, lit son état toutes les
+Un seul démon asynchrone se connecte à la station en BLE, lit son état toutes les
 quelques secondes, en déduit les variables NUT (`ups.status` / `battery.charge` /
 `ups.load` / autonomie) et tient à jour un fichier `.dev` `dummy-ups`. Le pilote
 `dummy-ups` de NUT relit ce fichier et `upsd` le sert sur le port 4141. Le même
@@ -56,28 +60,48 @@ fonctionnalités.**
 
 ## 3. Matériel supporté
 
+EcoFlow livre **deux générations de protocole BLE incompatibles**. Les deux sont
+implémentées ; on choisit avec `ecoflow.model` dans `config.yaml`.
+
+| `model` | Appareils | Préfixe de série | Nom BLE | Protocole |
+|---------|-----------|------------------|---------|-----------|
+| `delta2max` | **DELTA 2 Max** (2048 Wh, 2400 W AC) | `R351`, `R354` | `EF-R35…` | trames V2, structures binaires |
+| `delta2` | DELTA 2, DELTA 2 Black, DELTA 3 1500 | `R331`/`R335`, `R701`, `D361`/`D365` | `EF-R33…` | trames V2, structures binaires |
+| `delta3` | DELTA 3 (1024 Wh, 1800 W AC), DELTA 3 Plus, River 3 | `P231` | `EF-D3…` | trames V3, protobuf (`pd335`) |
+
 | Élément | Détail |
 |---------|--------|
-| Appareil confirmé | EcoFlow **DELTA 3** (1024 Wh, 1800 W AC), préfixe de série `P231`, nom BLE `EF-D3` |
-| Famille de protocole | `pd335` (protocole BLE moderne, chiffré, en protobuf) |
 | Hôte de test | Unraid + dongle USB BT Realtek RTL8821CU (BlueZ) |
 | Hôte de production | Raspberry Pi Zero 2W, Raspberry Pi OS Lite 64 bits, BT intégré |
 
-D'autres modèles de la même famille (DELTA 3 Plus/Max, River 3, …) utilisent le
-même cadrage et les mêmes numéros de champs protobuf et fonctionneront sans doute
-avec une config adaptée, mais seule la DELTA 3 est ciblée ici.
+L'orthographe est tolérante : `"DELTA 2 Max"`, `"delta-2-max"`, `"delta2max"` et
+le préfixe de série `"R351"` désignent tous le même pilote.
 
-> ### Note protocole — DELTA 3 ≠ DELTA 2
-> La DELTA **2** utilise un ancien protocole BLE *en clair* à offsets fixes. La
-> DELTA **3** utilise le nouveau protocole **chiffré, basé sur protobuf**
-> (messages `DisplayPropertyUpload` / `ConfigWrite` dans une trame V3 avec CRC8 +
-> CRC16 et une charge utile désobfusquée par XOR). Ce pont implémente le
-> protocole **DELTA 3**. Le chemin de lecture/décodage est testé unitairement
-> contre de **vraies trames capturées** d'un appareil cousin partageant les mêmes
-> numéros de champs protobuf.
+> ### Votre préfixe de série n'est pas dans la liste ?
+> **Renseignez quand même `model` avec la génération correspondante.** Le choix se
+> fait par configuration, pas en devinant depuis le numéro de série. D'autres
+> intégrations se basent sur une liste de préfixes en dur : une variante régionale
+> ou une révision plus récente est alors rejetée comme « appareil non supporté »
+> alors même qu'elle parle un protocole déjà implémenté — ce pont n'a pas ce
+> verrou. Vérifiez ensuite avec
+> [`ecoflow-nut sniff`](#vérifier-un-appareil-non-listé).
+
+> ### Note protocole — DELTA 2 ≠ DELTA 3
+> La **génération DELTA 2** envoie sa télémétrie sous forme de structures C
+> compactes en little-endian, une par sous-système (PD / EMS / BMS / onduleur /
+> MPPT), identifiées par le `(src, cmd_set, cmd_id)` de la trame — il n'y a aucun
+> tag de champ dans la charge utile. Le contrôle passe par un `cmd_id` dédié par
+> fonction, avec une charge utile brute de quelques octets.
+>
+> La **génération DELTA 3** envoie un protobuf `DisplayPropertyUpload` et accepte
+> un unique message `ConfigWrite`, dans une trame V3 plus longue de deux octets.
+>
+> Elles ne partagent que le cadrage CRC8/CRC16 et la poignée de main
+> d'authentification. Détails complets, tables de champs et état de vérification :
+> [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
 > ### Authentification
-> La DELTA 3 négocie une session chiffrée (`encrypt_type 7`, ECDH). L'étape finale
+> Les unités récentes négocient une session chiffrée (`encrypt_type 7`, ECDH). L'étape finale
 > d'authentification hache `md5(user_id + serial)`, où `user_id` est l'identifiant
 > de votre compte EcoFlow. Cet identifiant sert **une seule fois, localement, à
 > dériver le secret de session BLE** — aucun trafic de télémétrie ou de contrôle
@@ -85,6 +109,28 @@ avec une config adaptée, mais seule la DELTA 3 est ciblée ici.
 > les diagnostics de l'app) et placez-le dans `ecoflow.user_id`. Si votre unité
 > annonce `encrypt_type 0` ou `1`, aucun `user_id` n'est nécessaire. Voir
 > [Dépannage](#8-dépannage).
+
+### Vérifier un appareil non listé
+
+Deux diagnostics permettent d'identifier un appareil et de confirmer le pilote
+choisi, sans toucher au démon :
+
+```bash
+# 1. Trouver l'adresse MAC, le nom annoncé (qui encode le modèle) et l'encrypt_type.
+ecoflow-nut scan
+
+# 2. Se connecter et vider toutes les trames émises, décodées avec les
+#    dispositions du modèle configuré. Comparez avec l'écran de l'appareil.
+ecoflow-nut sniff --seconds 60
+
+# 3. Conserver une capture complète pour analyse hors-ligne / rapport de bug.
+ecoflow-nut sniff --out frames.jsonl
+```
+
+`sniff` rapporte **toutes** les trames, y compris celles qu'aucun pilote ne
+revendique, et signale toute charge utile plus courte ou plus longue que prévu —
+c'est ainsi qu'on distingue « mauvaise génération configurée » de « bonne
+génération, variante de firmware ».
 
 ## 4. Démarrage rapide (Docker sur Unraid)
 
@@ -164,7 +210,7 @@ Raspberry Pi OS lance `bluetoothd` par défaut, donc le BLE fonctionne sans
 configuration supplémentaire. Suivez la progression avec `journalctl -u
 ecoflow-nut-bridge -f` — cherchez `ble.authenticated` puis `state.updated`.
 
-> Le Pi est alimenté par le port USB-A de la DELTA 3 ; gardez donc
+> Le Pi est alimenté par le port USB-A de la station ; gardez donc
 > `auto_shutdown.cut_usb` à sa valeur par défaut `false` — couper l'USB tuerait
 > le pont lui-même.
 
@@ -174,8 +220,9 @@ Exemple annoté complet : [`config/config.example.yaml`](config/config.example.y
 
 | Clé | Défaut | Signification |
 |-----|--------|---------------|
-| `ecoflow.mac` | — (requis) | Adresse MAC BLE de la DELTA 3 |
+| `ecoflow.mac` | — (requis) | Adresse MAC BLE de la station (trouvée avec `ecoflow-nut scan`) |
 | `ecoflow.serial` | — | Numéro de série (utilisé pour l'auth + remonté à NUT) |
+| `ecoflow.model` | `delta3` | Pilote de protocole : `delta2max`, `delta2` ou `delta3` (voir [Matériel supporté](#3-matériel-supporté)) |
 | `ecoflow.poll_interval_seconds` | `5` | Fréquence de rafraîchissement du fichier NUT |
 | `ecoflow.encrypt_type` | `auto` | `auto` lit le type dans l'annonce BLE ; ou forcez `0`/`1`/`7` |
 | `ecoflow.user_id` | `""` | Identifiant de compte EcoFlow, requis pour `encrypt_type 7` |
@@ -183,7 +230,10 @@ Exemple annoté complet : [`config/config.example.yaml`](config/config.example.y
 | `ble.connect_timeout_seconds` | `30` | Délai de connexion BLE |
 | `ble.reconnect_backoff_max_seconds` | `60` | Backoff exponentiel max de reconnexion |
 | `nut.dev_file_path` | `/var/run/nut/ecoflow.dev` | Fichier d'état dummy-ups (doit correspondre à `ups.conf`) |
-| `nut.battery_capacity_wh` | `1024` | Capacité du pack pour l'estimation d'autonomie |
+| `nut.battery_capacity_wh` | `1024` | Capacité du pack pour l'estimation d'autonomie — à régler selon le modèle (DELTA 2 Max : `2048`) |
+| `nut.realpower_nominal` | `1800` | Puissance AC nominale, sert à dériver `ups.load` en pourcent (DELTA 2 Max : `2400`) |
+| `nut.ac_input_present_min_watts` | `10` | Seuil « secteur présent » de repli, pour les modèles qui ne mesurent pas la tension d'entrée |
+| `nut.ac_input_present_min_volts` | `50` | Seuil « secteur présent » quand l'appareil mesure la tension d'entrée (génération DELTA 2) |
 | `nut.thresholds.low_battery_percent` | `25` | En dessous → `OB LB` (déclenche l'arrêt des clients) |
 | `nut.thresholds.critical_battery_percent` | `10` | Informatif ; l'auto-cut utilise `auto_shutdown.trigger_soc_percent` |
 | `nut.static_values.*` | — | Valeurs de plaque remontées telles quelles (tension, fréquence, fabricant, modèle, série) |
@@ -220,7 +270,7 @@ ecoflow-nut --config config.yaml usb on   # bascule la sortie USB (aussi : usb o
 ecoflow-nut --config config.yaml dc on    # bascule le 12V DC     (aussi : dc off)
 ```
 
-La DELTA 3 n'accepte **qu'une seule** connexion BLE à la fois ; les commandes
+La station n'accepte **qu'une seule** connexion BLE à la fois ; les commandes
 `ac`/`usb`/`dc` parlent donc au **démon en cours** via un socket de contrôle local
 (`control_socket_path`) et c'est lui qui envoie la commande sur sa connexion
 existante — pas besoin d'arrêter le pont. Si aucun démon ne tourne, la CLI bascule
@@ -252,7 +302,7 @@ coupure :
   l'anti-rebond. Désactivé tant que `min_load_watts` n'est pas défini.
 
 `cut_usb`/`cut_dc` existent mais sont à `false` par défaut ; **n'activez jamais
-`cut_usb` si l'hôte du pont est alimenté par le port USB de la DELTA 3.**
+`cut_usb` si l'hôte du pont est alimenté par le port USB de la station.**
 
 Ceci complète — sans le remplacer — le comportement NUT normal : les clients
 s'éteignent d'eux-mêmes sur `ups.status` (`OB LB`) ; l'arrêt automatique coupe en
@@ -291,7 +341,7 @@ upsc ecoflow@<hôte-du-pont>:4141 battery.charge
 
 ## 8. Dépannage
 
-**Une seule connexion BLE à la fois.** La DELTA 3 n'accepte qu'un seul client
+**Une seule connexion BLE à la fois.** La station n'accepte qu'un seul client
 Bluetooth. Si une **app EcoFlow sur téléphone**, une intégration **Home Assistant
 (`ef_ble`)** ou un **autre conteneur** est connecté, l'unité **n'émet plus
 d'annonce** et le pont la signalera comme « not found during scan ». Fermez/
@@ -336,12 +386,12 @@ secondes après la connexion.
 
 ```
                           ┌──────────────── hôte du pont (Pi / Unraid) ──────────┐
-   EcoFlow DELTA 3        │                                                       │
+  station EcoFlow        │                                                       │
   ┌───────────────┐  BLE  │  ┌────────────────────┐   écrit      ┌─────────────┐ │
-  │  firmware     │◀─────▶│  │  démon ecoflow-nut  │ ───────────▶ │ ecoflow.dev │ │
-  │  pd335        │ GATT  │  │  • transport bleak  │  (format     │ fichier état│ │
-  │ DisplayProp.  │ 0002/ │  │  • trame V3 + CRC   │   dummy-ups) └──────┬──────┘ │
-  │ ConfigWrite   │ 0003  │  │  • décodage protobuf│                     │ lit    │
+  │ génér. DELTA 2│◀─────▶│  │  démon ecoflow-nut  │ ───────────▶ │ ecoflow.dev │ │
+  │  V2 + structs │ GATT  │  │  • transport bleak  │  (format     │ fichier état│ │
+  │ génér. DELTA 3│ 0002/ │  │  • cadrage V2/V3    │   dummy-ups) └──────┬──────┘ │
+  │  V3 + protobuf│ 0003  │  │  • pilote de modèle │                     │ lit    │
   └───────────────┘       │  │  • traduction NUT   │              ┌──────▼──────┐ │
                           │  └────────────────────┘              │ pilote      │ │
                           │                                       │ dummy-ups   │ │

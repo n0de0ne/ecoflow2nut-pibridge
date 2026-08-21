@@ -10,13 +10,13 @@ import sys
 import click
 import structlog
 
-from . import eve_outlet
+from . import devices, eve_outlet, sniffer
 from . import switchbot as switchbot_mod
 from .ble_client import EcoFlowBLE
 from .config import Config, load_config
-from .delta3 import DeviceState
-from .main import OUTPUT_BUILDERS, configure_logging, run_daemon, seed_state
+from .main import configure_logging, run_daemon, seed_state
 from .nut_writer import NutWriter, build_variables
+from .state import DeviceState
 
 log = structlog.get_logger(__name__)
 
@@ -82,7 +82,8 @@ def _toggle(config: Config, kind: str, state: str) -> None:
         return
     # No daemon listening: connect directly (only works if nothing else holds BLE).
     click.echo("no running daemon; connecting directly...")
-    asyncio.run(_send(config, OUTPUT_BUILDERS[kind](on)))
+    driver = devices.get_driver(config.ecoflow.model)
+    asyncio.run(_send(config, driver.output_packet(kind, on)))
     click.echo(f"sent (direct): {command}")
 
 
@@ -96,7 +97,7 @@ def _toggle(config: Config, kind: str, state: str) -> None:
 )
 @click.pass_context
 def cli(ctx: click.Context, config_path: str) -> None:
-    """EcoFlow DELTA 3 NUT bridge."""
+    """EcoFlow-to-NUT bridge."""
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config_path
 
@@ -122,6 +123,137 @@ def read(ctx: click.Context) -> None:
             indent=2,
         )
     )
+
+
+@cli.command()
+@click.option("--timeout", default=10, show_default=True, help="Scan seconds.")
+@click.option("--all", "show_all", is_flag=True, help="Include non-EcoFlow devices.")
+@click.pass_context
+def scan(ctx: click.Context, timeout: int, show_all: bool) -> None:
+    """Scan for EcoFlow power stations and show how to configure them.
+
+    Use this to find a device's MAC, its advertised name (which encodes the
+    model -- ``EF-D3…`` is a DELTA 3, ``EF-R35…`` a DELTA 2 Max) and the
+    encrypt_type its handshake needs.
+    """
+    config = load_config(ctx.obj["config_path"])
+    configure_logging(config.logging.level, config.logging.format)
+    from .ble_client import scan_devices
+
+    found = asyncio.run(scan_devices(config.ble.adapter, timeout))
+    if not show_all:
+        found = [d for d in found if d["looks_like_ecoflow"]]
+        if not found:
+            click.echo(
+                "no EcoFlow devices seen. The unit advertises only while awake and "
+                "not already connected -- close the EcoFlow app first, then retry "
+                "with --all to list every BLE device in range."
+            )
+            return
+    click.echo(json.dumps(found, indent=2))
+
+
+@cli.command()
+@click.option("--seconds", default=60, show_default=True, help="Capture duration.")
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(dir_okay=False, writable=True),
+    default=None,
+    help="Write every frame to this file as JSON lines, for offline analysis.",
+)
+@click.option("--verbose", is_flag=True, help="Log every frame, not just new kinds.")
+@click.pass_context
+def sniff(ctx: click.Context, seconds: int, out_path: str | None, verbose: bool) -> None:
+    """Capture and decode raw telemetry frames (a reverse-engineering aid).
+
+    Connects like the daemon does but reports *every* frame the device sends --
+    including ones no driver claims yet -- with a best-effort decode against the
+    configured model's layouts. Use it to confirm a new model really speaks the
+    protocol we assumed, and that the field offsets line up with the values on
+    the unit's own screen.
+    """
+    config = load_config(ctx.obj["config_path"])
+    configure_logging(config.logging.level, config.logging.format)
+    asyncio.run(_sniff(config, seconds, out_path, verbose))
+
+
+async def _sniff(
+    config: Config, seconds: int, out_path: str | None, verbose: bool
+) -> None:
+    driver = devices.get_driver(config.ecoflow.model)
+    counts: dict[sniffer.FrameKey, int] = {}
+    latest: dict[sniffer.FrameKey, dict] = {}
+    warnings: dict[sniffer.FrameKey, str] = {}
+    handle = open(out_path, "w") if out_path else None  # noqa: SIM115
+
+    def _on_packet(packet) -> None:
+        key = sniffer.frame_key(packet)
+        first = key not in counts
+        counts[key] = counts.get(key, 0) + 1
+        info = sniffer.describe_packet(driver, packet)
+        latest[key] = info
+        if (note := sniffer.layout_coverage(driver, packet)) is not None:
+            warnings[key] = note
+        if handle is not None:
+            handle.write(json.dumps(info) + "\n")
+        if first or verbose:
+            label = info.get("message", "unknown")
+            click.echo(f"{sniffer.format_key(key)} len={info['payload_len']:<4} {label}")
+
+    client = EcoFlowBLE(config.ecoflow, config.ble, on_packet=_on_packet)
+    click.echo(f"connecting to {config.ecoflow.mac} as model {driver.name}...")
+    await client.connect()
+    try:
+        if not await client.wait_authenticated(timeout=30):
+            click.echo("warning: no frame arrived within 30s (auth may have failed)")
+        await asyncio.sleep(seconds)
+    finally:
+        await client.disconnect()
+        if handle is not None:
+            handle.close()
+
+    click.echo("")
+    if not counts:
+        raise click.ClickException(
+            "no frames captured. Check ecoflow.serial/user_id and that nothing else "
+            "holds the BLE connection (the device accepts only one client)."
+        )
+    click.echo(f"--- {sum(counts.values())} frames, {len(counts)} distinct kinds ---")
+    for key, count in sorted(counts.items(), key=lambda kv: -kv[1]):
+        info = latest[key]
+        label = info.get("message", "unknown")
+        click.echo(f"\n{sniffer.format_key(key)}  x{count}  {label}")
+        if note := warnings.get(key):
+            click.echo(f"  ! {note}")
+        fields = info.get("fields") or info.get("protobuf")
+        if fields:
+            for name, value in fields.items():
+                click.echo(f"    {name} = {value}")
+        else:
+            click.echo(f"    payload = {info['payload_hex']}")
+
+    click.echo("\n--- merged state ---")
+    click.echo(json.dumps(_state_summary(client.state), indent=2))
+    if out_path:
+        click.echo(f"\nwrote {sum(counts.values())} frames to {out_path}")
+
+
+def _state_summary(state: DeviceState) -> dict[str, object]:
+    return {
+        "soc_percent": state.soc_percent,
+        "soc_source": state.soc_source,
+        "ac_input_watts": state.ac_input_watts,
+        "ac_output_watts": state.ac_output_watts,
+        "ac_input_voltage": state.ac_input_voltage,
+        "input_watts": state.input_watts,
+        "output_watts": state.output_watts,
+        "ac_input_present": state.ac_input_present,
+        "ac_output_on": state.ac_output_on,
+        "remain_charge_minutes": state.remain_charge_minutes,
+        "remain_discharge_minutes": state.remain_discharge_minutes,
+        "error_code": state.error_code,
+    }
 
 
 @cli.group()

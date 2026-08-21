@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ecoflow-nut-bridge"
 version = "0.1.8"
-description = "Expose an EcoFlow DELTA 3 portable power station as a standard NUT UPS over BLE."
+description = "Expose an EcoFlow portable power station as a standard NUT UPS over BLE."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 authors = [{ name = "ecoflow-nut-bridge contributors" }]
-keywords = ["ecoflow", "nut", "ups", "ble", "delta3"]
+keywords = ["ecoflow", "nut", "ups", "ble", "delta2", "delta3"]
 dependencies = [
     "bleak>=0.22",
     "bleak-retry-connector>=3.5",
