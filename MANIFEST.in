@@ -1,0 +1,4 @@
+# The web UI's assets must reach the sdist as well as the wheel (pyproject's
+# package-data covers the wheel). Without this, `pip install` from an sdist
+# yields a bridge that serves a blank dashboard.
+recursive-include src/ecoflow_nut/static *.html *.css *.js

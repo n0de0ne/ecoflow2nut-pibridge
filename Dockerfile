@@ -21,6 +21,13 @@ COPY src ./src
 # Include the optional web UI + Postgres logging extras in the image.
 RUN pip install '.[server]'
 
+# The web UI's assets are package-data, so a bad glob would produce an image
+# that serves a blank dashboard. CI installs in editable mode and can never
+# catch that, so assert against the real installed wheel here.
+RUN python -c "from importlib.resources import files; \
+assert files('ecoflow_nut').joinpath('static', 'index.html').is_file(), \
+'static assets missing from the installed wheel'"
+
 # ---- runtime ------------------------------------------------------------- #
 FROM python:3.12-slim AS runtime
 

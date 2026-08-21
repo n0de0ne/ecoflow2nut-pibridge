@@ -305,10 +305,15 @@ class EcoFlowBLE:
         ecoflow: EcoflowConfig,
         ble: BleConfig,
         on_state: Callable[[DeviceState], None] | None = None,
+        on_display_payload: Callable[[bytes], None] | None = None,
     ) -> None:
         self._ecoflow = ecoflow
         self._ble = ble
         self._on_state = on_state
+        # Raw DisplayPropertyUpload payload, before decoding drops the fields we
+        # do not recognise. Only the protocol diagnostic ('read --raw') uses it;
+        # the daemon leaves it unset.
+        self._on_display_payload = on_display_payload
 
         self.state = DeviceState()
         self._client: BleakClient | None = None
@@ -579,6 +584,8 @@ class EcoFlowBLE:
         )
 
         if delta3.DISPLAY_SRC == packet.src and self.state.is_display_packet(packet):
+            if self._on_display_payload is not None:
+                self._on_display_payload(packet.payload)
             self.state.merge_display_payload(packet.payload)
             log.debug(
                 "ble.display",

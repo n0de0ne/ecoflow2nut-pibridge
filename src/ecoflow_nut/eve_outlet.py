@@ -18,7 +18,9 @@ Design notes:
 * **On-demand connections.** Each action starts a controller, connects, writes,
   and stops again. The DELTA 3 link is a persistent, latency-sensitive BLE
   session; touching the radio only briefly (and ideally on a *separate* adapter)
-  keeps it from stalling telemetry.
+  keeps it from stalling telemetry. Callers that need several reads (polling the
+  outlet's draw until a load goes idle) should hold one :meth:`EveOutlet.session`
+  instead of paying a cold connect per sample.
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -37,12 +41,23 @@ log = structlog.get_logger(__name__)
 
 # HomeKit "On" characteristic -- public.hap.characteristic.on. aiohomekit may
 # report the short ("25") or full UUID form depending on the accessory.
-_ON_SHORT = "25"
-_ON_FULL = "000000250000100080000026bb765291"
+_ON_TYPES = frozenset({"25", "000000250000100080000026bb765291"})
+# Eve's vendor characteristic for instantaneous power. Not a standard HAP type,
+# so it only ever appears in full form. Present on the metering Eve Energy;
+# absent on non-metering outlets, which is why reads of it are optional.
+_WATT_TYPES = frozenset({"e863f10d079e48ff8f279c2605a29f52"})
 
 
 class EveError(RuntimeError):
     """Any failure talking to the HomeKit outlet (surfaced to the CLI/daemon)."""
+
+
+@dataclass(frozen=True, slots=True)
+class EveReading:
+    """One batched read of the outlet's state."""
+
+    on: bool | None
+    watts: float | None
 
 
 def _norm_id(device_id: str) -> str:
@@ -51,10 +66,25 @@ def _norm_id(device_id: str) -> str:
     return device_id.strip().lower()
 
 
-def _is_on_char(type_str: Any) -> bool:
-    """True if a characteristic ``type`` is the HomeKit On characteristic."""
-    t = str(type_str).lower().replace("-", "")
-    return t == _ON_SHORT or t == _ON_FULL
+def _norm_char_type(type_str: Any) -> str:
+    """Characteristic types come back in mixed case, with or without dashes."""
+    return str(type_str).lower().replace("-", "")
+
+
+def _find_char(accessories: Any, accepted: frozenset[str]) -> tuple[int, int] | None:
+    """Locate a characteristic by type across the accessory database.
+
+    Returns its ``(aid, iid)``, or None when the accessory does not expose it --
+    the caller decides whether that is fatal (the On switch) or simply a feature
+    this hardware lacks (power metering).
+    """
+    for accessory in accessories:
+        aid = accessory["aid"]
+        for service in accessory.get("services", []):
+            for char in service.get("characteristics", []):
+                if _norm_char_type(char.get("type", "")) in accepted:
+                    return (aid, char["iid"])
+    return None
 
 
 def _make_scanner(adapter: str) -> Any:
@@ -189,14 +219,121 @@ async def _connected_controller(adapter: str, device_id: str, timeout: int) -> A
     return controller
 
 
+class EveSession:
+    """An open connection to the outlet: read and write without reconnecting.
+
+    A cold call costs a bleak scan, a BLE connect, a HAP pair-verify and a full
+    GATT database read -- seconds of airtime. Anything that samples the outlet
+    repeatedly (waiting for a load to go idle) should do it through one of these
+    rather than paying that per sample.
+    """
+
+    def __init__(self, outlet: EveOutlet, pairing: Any, alias: str) -> None:
+        self._outlet = outlet
+        self._pairing = pairing
+        self._alias = alias
+
+    async def characteristics(self) -> list[dict[str, Any]]:
+        """Every characteristic the accessory exposes, flattened, with values.
+
+        Diagnostic only: this is how you find out whether a given unit reports
+        power at all, and under which type.
+        """
+        accessories = await self._pairing.list_accessories_and_characteristics()
+        rows: list[dict[str, Any]] = []
+        wanted: list[tuple[int, int]] = []
+        for accessory in accessories:
+            aid = accessory["aid"]
+            for service in accessory.get("services", []):
+                for char in service.get("characteristics", []):
+                    row = {"aid": aid, "service": service.get("type", ""), **char}
+                    rows.append(row)
+                    if "pr" in (char.get("perms") or []):
+                        wanted.append((aid, char["iid"]))
+        if wanted:
+            # One batched read for every readable characteristic.
+            with contextlib.suppress(Exception):
+                values = await self._pairing.get_characteristics(wanted)
+                for row in rows:
+                    entry = values.get((row["aid"], row["iid"]))
+                    if entry is not None and "value" in entry:
+                        row["value"] = entry["value"]
+        return rows
+
+    async def _resolve(
+        self, name: str, accepted: frozenset[str]
+    ) -> tuple[int, int] | None:
+        cache = self._outlet._char_cache
+        if name in cache:
+            return cache[name]
+        accessories = await self._pairing.list_accessories_and_characteristics()
+        # Resolve everything we know about in one walk, so a watts lookup never
+        # costs a second traversal.
+        cache["on"] = _find_char(accessories, _ON_TYPES)
+        cache["watts"] = _find_char(accessories, _WATT_TYPES)
+        return cache[name]
+
+    async def _on_aid_iid(self) -> tuple[int, int]:
+        found = await self._resolve("on", _ON_TYPES)
+        if found is None:
+            raise EveError("no On characteristic found on the paired accessory")
+        return found
+
+    async def read(self) -> EveReading:
+        """Batched read of on/off and (when supported) instantaneous watts."""
+        on_id = await self._on_aid_iid()
+        watt_id = await self._resolve("watts", _WATT_TYPES)
+        wanted = [on_id] + ([watt_id] if watt_id is not None else [])
+        values = await self._pairing.get_characteristics(wanted)
+
+        raw_on = values.get(on_id, {}).get("value")
+        watts: float | None = None
+        if watt_id is not None:
+            raw_watts = values.get(watt_id, {}).get("value")
+            if raw_watts is not None:
+                with contextlib.suppress(TypeError, ValueError):
+                    watts = float(raw_watts)
+        return EveReading(on=None if raw_on is None else bool(raw_on), watts=watts)
+
+    async def set(self, on: bool) -> None:
+        aid, iid = await self._on_aid_iid()
+        result = await self._pairing.put_characteristics([(aid, iid, on)])
+        # put_characteristics returns a (possibly empty) mapping of failures
+        # keyed by (aid, iid); a non-empty result means the write was rejected.
+        if result:
+            raise EveError(f"outlet rejected the write: {result}")
+        log.info("eve.set", device_id=self._alias, on=on, aid=aid, iid=iid)
+
+
 class EveOutlet:
     """Turn a paired HomeKit-over-BLE outlet on or off on demand."""
 
     def __init__(self, config: EveOutletConfig) -> None:
         self._config = config
-        # Cache the resolved (aid, iid) of the On characteristic between calls so
-        # we do not re-walk the accessory database on every toggle.
-        self._on_aid_iid: tuple[int, int] | None = None
+        # Cache resolved (aid, iid) pairs between calls so we do not re-walk the
+        # accessory database on every toggle. A cached None means "this hardware
+        # does not expose it", so absent characteristics are not re-searched.
+        self._char_cache: dict[str, tuple[int, int] | None] = {}
+        # One radio, one conversation at a time: a web-UI toggle racing an
+        # auto-shutdown cut would otherwise start two scanners on the adapter.
+        self._lock = asyncio.Lock()
+
+    @contextlib.asynccontextmanager
+    async def session(self) -> AsyncIterator[EveSession]:
+        """Open one connection to the outlet for the duration of the block."""
+        alias, pairing_data = self._select_pairing(self._pairing_store())
+        async with self._lock:
+            controller = await _connected_controller(
+                self._config.adapter, alias, self._config.connect_timeout_seconds
+            )
+            try:
+                pairing = controller.load_pairing(alias, pairing_data)
+                yield EveSession(self, pairing, alias)
+            finally:
+                # Best-effort: a cancelled session (manual override taking over)
+                # must not have its teardown mask the cancellation.
+                with contextlib.suppress(Exception):
+                    await controller.async_stop()
 
     def _pairing_store(self) -> dict[str, Any]:
         path = Path(self._config.pairing_file)
@@ -223,53 +360,25 @@ class EveOutlet:
             )
         return alias, store[alias]
 
-    async def _on_characteristic(self, pairing: Any) -> tuple[int, int]:
-        if self._on_aid_iid is not None:
-            return self._on_aid_iid
-        accessories = await pairing.list_accessories_and_characteristics()
-        for accessory in accessories:
-            aid = accessory["aid"]
-            for service in accessory.get("services", []):
-                for char in service.get("characteristics", []):
-                    if _is_on_char(char.get("type", "")):
-                        self._on_aid_iid = (aid, char["iid"])
-                        return self._on_aid_iid
-        raise EveError("no On characteristic found on the paired accessory")
-
     async def set(self, on: bool) -> None:
         """Connect, flip the outlet's On characteristic, and disconnect."""
-        alias, pairing_data = self._select_pairing(self._pairing_store())
-        controller = await _connected_controller(
-            self._config.adapter, alias, self._config.connect_timeout_seconds
-        )
-        try:
-            pairing = controller.load_pairing(alias, pairing_data)
-            aid, iid = await self._on_characteristic(pairing)
-            result = await pairing.put_characteristics([(aid, iid, on)])
-            # put_characteristics returns a (possibly empty) mapping of failures
-            # keyed by (aid, iid); a non-empty result means the write was
-            # rejected.
-            if result:
-                raise EveError(f"outlet rejected the write: {result}")
-            log.info("eve.set", device_id=alias, on=on, aid=aid, iid=iid)
-        finally:
-            await controller.async_stop()
+        async with self.session() as eve:
+            await eve.set(on)
 
     async def status(self) -> bool | None:
         """Return the outlet's current On value, or None if unavailable."""
-        alias, pairing_data = self._select_pairing(self._pairing_store())
-        controller = await _connected_controller(
-            self._config.adapter, alias, self._config.connect_timeout_seconds
-        )
-        try:
-            pairing = controller.load_pairing(alias, pairing_data)
-            aid, iid = await self._on_characteristic(pairing)
-            values = await pairing.get_characteristics([(aid, iid)])
-            entry = values.get((aid, iid), {})
-            value = entry.get("value")
-            return None if value is None else bool(value)
-        finally:
-            await controller.async_stop()
+        async with self.session() as eve:
+            return (await eve.read()).on
+
+    async def read(self) -> EveReading:
+        """One connection, returning on/off plus watts when the outlet meters."""
+        async with self.session() as eve:
+            return await eve.read()
+
+    async def characteristics(self) -> list[dict[str, Any]]:
+        """Diagnostic dump of everything the paired accessory exposes."""
+        async with self.session() as eve:
+            return await eve.characteristics()
 
 
 async def discover(adapter: str, timeout: int = 10) -> list[dict[str, Any]]:

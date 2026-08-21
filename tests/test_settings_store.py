@@ -52,6 +52,32 @@ def test_apply_updates_sets_nested_values() -> None:
     assert config.ecoflow.poll_interval_seconds == 10
 
 
+def test_history_knobs_are_editable() -> None:
+    """Sample density and retention are the knobs users reach for; they must be
+    live-editable, since the stores read them per write / per prune."""
+    config = _config()
+    changed = apply_updates(
+        config,
+        {
+            "sqlite.min_interval_seconds": 5,
+            "sqlite.retention_days": 30,
+            "postgres.min_interval_seconds": 0,
+            "postgres.retention_days": 0,
+        },
+    )
+    assert "sqlite.min_interval_seconds" in changed
+    assert config.sqlite.min_interval_seconds == 5
+    assert config.sqlite.retention_days == 30
+    assert config.postgres.min_interval_seconds == 0
+
+
+def test_history_knobs_are_range_checked() -> None:
+    with pytest.raises(ValueError, match="must be >= 0"):
+        apply_updates(_config(), {"sqlite.min_interval_seconds": -1})
+    with pytest.raises(ValueError, match="<= 3650"):
+        apply_updates(_config(), {"sqlite.retention_days": 99999})
+
+
 def test_unchanged_value_not_reported() -> None:
     config = _config()
     config.auto_shutdown.trigger_soc_percent = 10

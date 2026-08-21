@@ -210,6 +210,40 @@ def encode_varint(value: int) -> bytes:
             return bytes(out)
 
 
+def decode_fields(buf: bytes) -> list[tuple[int, int, Any]]:
+    """Decode a message to ``[(field_number, wire_type, value), ...]``, in order.
+
+    Like :func:`decode_message` but keeps the wire type and every occurrence of a
+    repeated field. Used by the ``read --raw`` diagnostic: when hunting for an
+    undecoded field, knowing whether it arrived as a varint or a float is half
+    the information.
+    """
+    out: list[tuple[int, int, Any]] = []
+    pos = 0
+    length = len(buf)
+    while pos < length:
+        tag, pos = _read_varint(buf, pos)
+        field_number = tag >> 3
+        wire_type = tag & 0x07
+        value: Any
+        if wire_type == WIRE_VARINT:
+            value, pos = _read_varint(buf, pos)
+        elif wire_type == WIRE_I32:
+            value = struct.unpack_from("<f", buf, pos)[0]
+            pos += 4
+        elif wire_type == WIRE_I64:
+            value = struct.unpack_from("<d", buf, pos)[0]
+            pos += 8
+        elif wire_type == WIRE_LEN:
+            size, pos = _read_varint(buf, pos)
+            value = buf[pos : pos + size]
+            pos += size
+        else:  # pragma: no cover - groups are not used by these messages
+            raise PacketError(f"unsupported wire type {wire_type} at offset {pos}")
+        out.append((field_number, wire_type, value))
+    return out
+
+
 def decode_message(buf: bytes) -> dict[int, Any]:
     """Decode the top-level fields of a protobuf message.
 

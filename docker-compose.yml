@@ -13,6 +13,14 @@ services:
     privileged: true
     volumes:
       - ./config/config.yaml:/app/config/config.yaml:ro
+      # Persist the state directory across image updates. The web UI's saved
+      # settings (settings.json), the SQLite telemetry history and any HomeKit
+      # pairing all live here -- without this volume they are inside the
+      # container and are destroyed by every `docker compose up -d` after a pull.
+      - ecoflow-state:/var/lib/ecoflow-nut
     restart: unless-stopped
     environment:
       - TZ=America/St_Barthelemy
+
+volumes:
+  ecoflow-state:

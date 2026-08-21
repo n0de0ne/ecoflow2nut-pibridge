@@ -49,7 +49,7 @@ class Field:
     def step(self) -> float | None:
         if self.type == "float" or self.type == "float_or_null":
             return 0.01
-        if self.type == "int":
+        if self.type == "int" or self.type == "int_or_null":
             return 1
         return None
 
@@ -142,6 +142,30 @@ FIELDS: tuple[Field, ...] = (
         "Restore on recovery",
         "Auto-shutdown",
     ),
+    Field(
+        "auto_shutdown.eve_confirm_idle_watts",
+        ("auto_shutdown", "eve_confirm_idle_watts"),
+        "float_or_null",
+        "Eve idle confirm (W)",
+        "Auto-shutdown",
+        0,
+        5000,
+        "Before cutting the Eve outlet, wait until the outlet's own draw is "
+        "at/below this -- proof the load finished shutting down. Blank = cut "
+        "immediately. Needs an Eve that reports watts ('eve status --all').",
+    ),
+    Field(
+        "auto_shutdown.eve_confirm_timeout_seconds",
+        ("auto_shutdown", "eve_confirm_timeout_seconds"),
+        "int_or_null",
+        "Eve confirm timeout (s)",
+        "Auto-shutdown",
+        0,
+        86400,
+        "Cut anyway after this long. Blank waits indefinitely: safest for the "
+        "load, but an unreachable outlet then never gets shed and the battery "
+        "drains to empty.",
+    ),
     # --- NUT thresholds ---
     Field(
         "nut.low_battery_percent",
@@ -204,10 +228,13 @@ FIELDS: tuple[Field, ...] = (
         "ecoflow.poll_interval_seconds",
         ("ecoflow", "poll_interval_seconds"),
         "int",
-        "Poll interval (s)",
+        "BLE link check (s)",
         "Device",
         1,
         3600,
+        "How often the bridge checks the BLE link is alive -- a watchdog, not a "
+        "sample rate. The DELTA 3 pushes telemetry on its own schedule and cannot "
+        "be asked to send faster; see History below for chart resolution.",
     ),
     Field(
         "nut.battery_capacity_wh",
@@ -226,6 +253,53 @@ FIELDS: tuple[Field, ...] = (
         "Device",
         1,
         100000,
+    ),
+    # --- Telemetry history ---
+    # Both backends are listed because the schema is static and cannot know which
+    # store is enabled; only one is ever active (Postgres wins if both are on).
+    # These are read per write / per prune, so edits take effect immediately.
+    Field(
+        "sqlite.min_interval_seconds",
+        ("sqlite", "min_interval_seconds"),
+        "int",
+        "SQLite sample interval (s)",
+        "History",
+        0,
+        3600,
+        "Minimum gap between stored samples. Lower = finer charts but more "
+        "SD-card writes; 0 stores every frame. The device's own push rate is the "
+        "ceiling either way.",
+    ),
+    Field(
+        "sqlite.retention_days",
+        ("sqlite", "retention_days"),
+        "int",
+        "SQLite retention (days)",
+        "History",
+        0,
+        3650,
+        "Samples older than this are deleted at the next prune (every 6h). "
+        "Lowering it discards history. 0 keeps everything.",
+    ),
+    Field(
+        "postgres.min_interval_seconds",
+        ("postgres", "min_interval_seconds"),
+        "int",
+        "Postgres sample interval (s)",
+        "History",
+        0,
+        3600,
+        "As above, for the Postgres backend.",
+    ),
+    Field(
+        "postgres.retention_days",
+        ("postgres", "retention_days"),
+        "int",
+        "Postgres retention (days)",
+        "History",
+        0,
+        3650,
+        "As above, for the Postgres backend.",
     ),
     # --- Electricity pricing ---
     Field("pricing.enabled", ("pricing", "enabled"), "bool", "Show cost", "Pricing"),
@@ -322,6 +396,10 @@ def _coerce(field: Field, value: Any) -> Any:
         if value is None or value == "":
             return None
         return _coerce_number(field, value, integer=False)
+    if t == "int_or_null":
+        if value is None or value == "":
+            return None
+        return _coerce_number(field, value, integer=True)
     if t == "int":
         return _coerce_number(field, value, integer=True)
     if t == "float":

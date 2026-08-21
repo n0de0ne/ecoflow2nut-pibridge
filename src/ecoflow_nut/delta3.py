@@ -11,6 +11,7 @@ cross-checked by decoding real captured frames from a sibling device
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from . import protocol
 from .protocol import Packet, ProtoField
@@ -19,8 +20,25 @@ from .protocol import Packet, ProtoField
 F_ERRCODE = 1
 F_POW_IN_SUM_W = 3  # total input watts (float)
 F_POW_OUT_SUM_W = 4  # total output watts (float)
+# A DELTA 3 has two USB-A and two USB-C ports and reports each separately, all
+# as negative floats (like AC output). Reading only port 1 of each made a load on
+# a second port invisible: the dashboard showed 0 W and "idle/off" while the
+# EcoFlow app reported the port on and drawing. Field 12 is confirmed against a
+# real DELTA 3 (it carried the bridge's own ~1 W with 9/10/11 all at 0.0);
+# 10 is inferred from the pattern and reads 0.0 on the same frame.
 F_POW_GET_QCUSB1 = 9  # USB-A port 1 watts (float)
+F_POW_GET_QCUSB2 = 10  # USB-A port 2 watts (float)
 F_POW_GET_TYPEC1 = 11  # USB-C port 1 watts (float)
+F_POW_GET_TYPEC2 = 12  # USB-C port 2 watts (float)
+# Per-port flow state. NOT booleans -- see flow_is_on(). The DELTA 3's USB is a
+# single master switch (cfg_usb_open), so all four USB ports report the same
+# state; any of them answers "is USB on".
+F_FLOW_INFO_QCUSB1 = 13
+F_FLOW_INFO_QCUSB2 = 14
+F_FLOW_INFO_TYPEC1 = 15
+F_FLOW_INFO_TYPEC2 = 16
+F_FLOW_INFO_12V = 33  # 12V DC output flow state
+F_POW_GET_12V = 37  # 12V DC output watts (float)
 F_PLUG_IN_INFO_AC_CHARGER_FLAG = 202  # AC charger connected (bool/uint32)
 F_BMS_BATT_SOC = 242  # BMS state of charge (float %)
 F_CMS_BATT_SOC = 262  # combined/displayed state of charge (float %)
@@ -29,6 +47,54 @@ F_CMS_CHG_REM_TIME = 269  # charge remaining time (uint32, minutes)
 F_FLOW_INFO_AC_OUT = 367  # AC output flow state (uint32, 0=off)
 F_POW_GET_AC_IN = 54  # AC input watts (float)
 F_POW_GET_AC_OUT = 368  # AC output watts (float, reported negative)
+
+# Field number -> the name we know it by, for the 'read --raw' diagnostic. The
+# device sends far more fields than we decode; this labels the ones we do so an
+# unknown field stands out in the dump.
+DISPLAY_FIELD_NAMES: dict[int, str] = {
+    F_ERRCODE: "errcode",
+    F_FLOW_INFO_QCUSB1: "flow_info_qcusb1",
+    F_FLOW_INFO_QCUSB2: "flow_info_qcusb2",
+    F_FLOW_INFO_TYPEC1: "flow_info_typec1",
+    F_FLOW_INFO_TYPEC2: "flow_info_typec2",
+    F_FLOW_INFO_12V: "flow_info_12v",
+    F_POW_GET_12V: "pow_get_12v",
+    F_POW_IN_SUM_W: "pow_in_sum_w",
+    F_POW_OUT_SUM_W: "pow_out_sum_w",
+    F_POW_GET_QCUSB1: "pow_get_qcusb1",
+    F_POW_GET_QCUSB2: "pow_get_qcusb2",
+    F_POW_GET_TYPEC1: "pow_get_typec1",
+    F_POW_GET_TYPEC2: "pow_get_typec2",
+    F_POW_GET_AC_IN: "pow_get_ac_in",
+    F_PLUG_IN_INFO_AC_CHARGER_FLAG: "plug_in_info_ac_charger_flag",
+    F_BMS_BATT_SOC: "bms_batt_soc",
+    F_CMS_BATT_SOC: "cms_batt_soc",
+    F_CMS_DSG_REM_TIME: "cms_dsg_rem_time",
+    F_CMS_CHG_REM_TIME: "cms_chg_rem_time",
+    F_FLOW_INFO_AC_OUT: "flow_info_ac_out",
+    F_POW_GET_AC_OUT: "pow_get_ac_out",
+}
+
+# Field numbers worth a second look in the 'read --raw' dump: the neighbourhoods
+# of things we already decode, where a sibling field we have missed is most
+# likely to be hiding.
+SUSPECT_FIELDS: frozenset[int] = (
+    frozenset(range(9, 17)) | frozenset(range(33, 38)) | frozenset(range(360, 369))
+)
+
+
+def flow_is_on(value: Any) -> bool:
+    """Interpret a ``flow_info_*`` value as a port on/off state.
+
+    These are bitmasks, not booleans: a real DELTA 3 reports 14 (0b1110) for an
+    active port and 4 (0b0100) for an inactive one, so a plain ``bool()`` reads
+    every inactive-but-present port as ON. Only the low two bits carry the
+    state; this matches the check the EcoFlow app itself makes (and
+    ha-ef-ble's ``flow_is_on``). Values whose low bits are 0b01 are unknown and
+    treated as off.
+    """
+    return (int(value) & 0b11) in (0b10, 0b11)
+
 
 # The frame that carries DisplayPropertyUpload.
 DISPLAY_SRC = 0x02
@@ -62,10 +128,23 @@ class DeviceState:
     ac_output_watts: float | None = None
     input_watts: float | None = None
     output_watts: float | None = None
+    # Totals across all ports of each type -- what the UI, NUT and the telemetry
+    # store consume.
     usb_output_watts: float | None = None
     usbc_output_watts: float | None = None
+    # Per-port readings behind those totals. Held separately because frames are
+    # partial: a frame carrying only port 1 must not wipe what port 2 last
+    # reported, so the totals are recomputed from last-known values rather than
+    # from whatever happened to arrive.
+    usb_a1_watts: float | None = None
+    usb_a2_watts: float | None = None
+    usb_c1_watts: float | None = None
+    usb_c2_watts: float | None = None
+    dc_output_watts: float | None = None
     ac_input_present: bool | None = None
     ac_output_on: bool | None = None
+    usb_output_on: bool | None = None
+    dc_output_on: bool | None = None
     remain_charge_minutes: int | None = None
     remain_discharge_minutes: int | None = None
     error_code: int | None = None
@@ -99,15 +178,27 @@ class DeviceState:
             self.input_watts = round(float(v), 1)
         if (v := fields.get(F_POW_OUT_SUM_W)) is not None:
             self.output_watts = round(float(v), 1)
-        if (v := fields.get(F_POW_GET_QCUSB1)) is not None:
-            self.usb_output_watts = round(abs(float(v)), 1)
-        if (v := fields.get(F_POW_GET_TYPEC1)) is not None:
-            self.usbc_output_watts = round(abs(float(v)), 1)
+        self._merge_usb(fields)
+
+        if (v := fields.get(F_POW_GET_12V)) is not None:
+            self.dc_output_watts = round(abs(float(v)), 1)
 
         if (v := fields.get(F_PLUG_IN_INFO_AC_CHARGER_FLAG)) is not None:
             self.ac_input_present = bool(v)
         if (v := fields.get(F_FLOW_INFO_AC_OUT)) is not None:
-            self.ac_output_on = bool(v)
+            self.ac_output_on = flow_is_on(v)
+        if (v := fields.get(F_FLOW_INFO_12V)) is not None:
+            self.dc_output_on = flow_is_on(v)
+        # One master switch drives all four USB ports, so whichever port's flag
+        # a (partial) frame happens to carry answers for the lot.
+        for number in (
+            F_FLOW_INFO_QCUSB1,
+            F_FLOW_INFO_QCUSB2,
+            F_FLOW_INFO_TYPEC1,
+            F_FLOW_INFO_TYPEC2,
+        ):
+            if (v := fields.get(number)) is not None:
+                self.usb_output_on = flow_is_on(v)
 
         if (v := fields.get(F_CMS_CHG_REM_TIME)) is not None:
             self.remain_charge_minutes = int(v)
@@ -115,6 +206,31 @@ class DeviceState:
             self.remain_discharge_minutes = int(v)
         if (v := fields.get(F_ERRCODE)) is not None:
             self.error_code = int(v)
+
+    def _merge_usb(self, fields: dict[int, Any]) -> None:
+        """Update the per-port USB readings, then recompute the two totals.
+
+        Ports report negative watts (as AC output does); we expose the load as a
+        positive number. Totals are summed from last-known per-port values so a
+        partial frame cannot zero a port it simply did not mention.
+        """
+        for number, attr in (
+            (F_POW_GET_QCUSB1, "usb_a1_watts"),
+            (F_POW_GET_QCUSB2, "usb_a2_watts"),
+            (F_POW_GET_TYPEC1, "usb_c1_watts"),
+            (F_POW_GET_TYPEC2, "usb_c2_watts"),
+        ):
+            if (v := fields.get(number)) is not None:
+                setattr(self, attr, round(abs(float(v)), 1))
+
+        for total, ports in (
+            ("usb_output_watts", (self.usb_a1_watts, self.usb_a2_watts)),
+            ("usbc_output_watts", (self.usb_c1_watts, self.usb_c2_watts)),
+        ):
+            # Stay None until at least one port of that type has been seen, so
+            # "not reported" reads differently from "reported zero".
+            if any(p is not None for p in ports):
+                setattr(self, total, round(sum(p or 0.0 for p in ports), 1))
 
     def is_display_packet(self, packet: Packet) -> bool:
         return (
