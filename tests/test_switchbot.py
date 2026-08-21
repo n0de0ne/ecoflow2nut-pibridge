@@ -13,7 +13,7 @@ from ecoflow_nut.switchbot import _COMMANDS, SwitchBot, SwitchBotError
 
 _BASE = """
 ecoflow:
-  mac: "AA:BB:CC:DD:EE:FF"
+  mac: "DE:AD:BE:EF:00:01"
   serial: "P231TEST"
 """
 

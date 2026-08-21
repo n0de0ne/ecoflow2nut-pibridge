@@ -10,7 +10,7 @@ from ecoflow_nut.config import load_config
 
 _BASE = """
 ecoflow:
-  mac: "AA:BB:CC:DD:EE:FF"
+  mac: "DE:AD:BE:EF:00:01"
   serial: "P231TEST"
 """
 
@@ -81,3 +81,37 @@ postgres:
     config = load_config(_write(tmp_path, extra))
     assert config.web.auth_token == "envtoken"
     assert config.postgres.dsn == "env-dsn"
+
+
+# --------------------------------------------------------------------------- #
+# Placeholder rejection
+# --------------------------------------------------------------------------- #
+def _config_with(tmp_path, mac: str, serial: str, user_id: str = "123") -> str:
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        f'ecoflow:\n  mac: "{mac}"\n  serial: "{serial}"\n  user_id: "{user_id}"\n'
+    )
+    return str(cfg)
+
+
+@pytest.mark.parametrize(
+    "mac,serial",
+    [
+        ("AA:BB:CC:DD:EE:FF", "E201ZE1APH560861"),  # example MAC left in place
+        ("DE:AD:BE:EF:00:01", "REPLACE-WITH-FULL-SERIAL"),
+        ("DE:AD:BE:EF:00:01", "E201XXXXXXXXXXXX"),
+    ],
+)
+def test_example_placeholders_are_rejected_with_a_useful_message(tmp_path, mac, serial):
+    """A placeholder left in place otherwise fails far from its cause.
+
+    An unedited MAC surfaces as "device not found during scan", which reads
+    like a radio or range problem rather than an unfinished config.
+    """
+    with pytest.raises(ValueError, match="placeholder"):
+        load_config(_config_with(tmp_path, mac, serial))
+
+
+def test_a_real_looking_config_is_accepted(tmp_path):
+    config = load_config(_config_with(tmp_path, "DC:06:75:A8:3E:29", "E201ZE1APH560861"))
+    assert config.ecoflow.mac == "DC:06:75:A8:3E:29"

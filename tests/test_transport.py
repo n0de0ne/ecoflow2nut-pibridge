@@ -150,6 +150,6 @@ def _client_for_dedupe_test():
     from ecoflow_nut.config import BleConfig, EcoflowConfig
 
     return EcoFlowBLE(
-        EcoflowConfig(mac="AA:BB:CC:DD:EE:FF", serial="E201X", model="e2000"),
+        EcoflowConfig(mac="DE:AD:BE:EF:00:01", serial="E201X", model="e2000"),
         BleConfig(),
     )

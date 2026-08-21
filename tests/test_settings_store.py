@@ -16,7 +16,7 @@ from ecoflow_nut.settings_store import (
 
 
 def _config() -> Config:
-    return Config(ecoflow=EcoflowConfig(mac="AA:BB:CC:DD:EE:FF", serial="P231"))
+    return Config(ecoflow=EcoflowConfig(mac="DE:AD:BE:EF:00:01", serial="P231"))
 
 
 def test_schema_and_values_cover_same_keys() -> None:

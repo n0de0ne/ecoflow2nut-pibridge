@@ -266,6 +266,28 @@ def _filter(cls: type, data: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in data.items() if k in names}
 
 
+# Values carried straight over from the shipped example configs. Left in place
+# they fail far from the cause -- a placeholder MAC surfaces as "device not
+# found during scan", which reads like a radio or range problem.
+_PLACEHOLDERS = ("AA:BB:CC:DD:EE:FF", "REPLACE-WITH-FULL-SERIAL", "REPLACE-WITH-USER-ID")
+
+
+def _reject_placeholders(ecoflow: EcoflowConfig) -> None:
+    for key in ("mac", "serial", "user_id"):
+        value = str(getattr(ecoflow, key) or "")
+        if value.upper() in _PLACEHOLDERS or value.upper().startswith("REPLACE-WITH"):
+            raise ValueError(
+                f"config: 'ecoflow.{key}' is still the example placeholder "
+                f"({value!r}). Fill in your own device's value -- find the MAC "
+                "with 'ecoflow-nut scan', the serial on the unit's sticker."
+            )
+        if key != "user_id" and "XXXX" in value.upper():
+            raise ValueError(
+                f"config: 'ecoflow.{key}' still contains the example 'XXXX' "
+                f"placeholder ({value!r}); fill in your own device's value."
+            )
+
+
 def load_config(path: str | Path) -> Config:
     """Load and validate configuration from a YAML file."""
     raw = yaml.safe_load(Path(path).read_text()) or {}
@@ -274,6 +296,7 @@ def load_config(path: str | Path) -> Config:
     if not eco_raw or not eco_raw.get("mac"):
         raise ValueError("config: 'ecoflow.mac' is required")
     ecoflow = EcoflowConfig(**_filter(EcoflowConfig, eco_raw))
+    _reject_placeholders(ecoflow)
 
     ble = BleConfig(**_filter(BleConfig, raw.get("ble", {})))
 

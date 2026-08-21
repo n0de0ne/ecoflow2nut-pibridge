@@ -18,7 +18,7 @@ from ecoflow_nut.eve_outlet import EveError, EveOutlet, _is_on_char
 
 _BASE = """
 ecoflow:
-  mac: "AA:BB:CC:DD:EE:FF"
+  mac: "DE:AD:BE:EF:00:01"
   serial: "P231TEST"
 """
 

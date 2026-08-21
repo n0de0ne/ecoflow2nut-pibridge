@@ -16,7 +16,7 @@ from ecoflow_nut.state import DeviceState
 @pytest.fixture
 def nut() -> NutConfig:
     cfg = NutConfig(battery_capacity_wh=1024)
-    cfg.static_values.serial = "P231XXXXXXXXXXXX"
+    cfg.static_values.serial = "P231ZE1APH560861"
     return cfg
 
 
@@ -111,7 +111,7 @@ def test_build_variables_has_required_fields(nut):
     assert variables["ups.load"] == "14"
     assert variables["ups.realpower"] == "250"
     assert variables["ups.realpower.nominal"] == "1800"
-    assert variables["device.serial"] == "P231XXXXXXXXXXXX"
+    assert variables["device.serial"] == "P231ZE1APH560861"
     assert variables["battery.type"] == "LiFePO4"
     assert variables["battery.voltage.nominal"] == "51.2"
 

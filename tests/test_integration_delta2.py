@@ -21,7 +21,7 @@ def nut() -> NutConfig:
     """A DELTA 2 Max nameplate: 2048 Wh pack, 2400 W inverter."""
     cfg = NutConfig(battery_capacity_wh=2048, realpower_nominal=2400)
     cfg.static_values.model = "DELTA 2 Max"
-    cfg.static_values.serial = "R351XXXXXXXXXXXX"
+    cfg.static_values.serial = "R351ZE1APH560861"
     return cfg
 
 
