@@ -34,7 +34,7 @@ from bleak.backends.device import BLEDevice
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 
-from . import devices, keydata
+from . import devices, keydata, protocol
 from .config import BleConfig, EcoflowConfig
 from .devices import DeviceDriver
 from .protocol import Packet, PacketError, crc8, crc16
@@ -165,16 +165,13 @@ class PassthroughAssembler(FrameAssembler):
             data = data[start:]
             if len(data) < 5:
                 break
-            # Frame layout differs by version: V2 has no dsrc/ddst, so its
-            # payload starts two bytes earlier than V3's.
             if crc8(data[:4]) != data[4]:
                 # Not a real header -- a 0xAA inside a payload. Resync past it.
                 data = data[1:]
                 continue
-            header_len = 16 if (data[1] & 0x0F) == 2 else 18
-            length = struct.unpack_from("<H", data, 2)[0]
-            frame_len = header_len + length + 2
-            if len(data) < frame_len:
+            # Each generation counts its length field differently.
+            frame_len = protocol.frame_length(data)
+            if frame_len is None or len(data) < frame_len:
                 break
             payloads.append(data[:frame_len])
             data = data[frame_len:]
@@ -649,7 +646,7 @@ class EcoFlowBLE:
 
     def _handle_payload(self, raw: bytes) -> None:
         try:
-            packet = Packet.from_bytes(raw, xor_payload=self._driver.xor_payload)
+            packet = protocol.parse_frame(raw, xor_payload=self._driver.xor_payload)
         except PacketError as exc:
             log.debug("ble.packet_parse_skip", error=str(exc))
             return

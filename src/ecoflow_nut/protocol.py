@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 _PREFIX: Final = 0xAA
 _PRODUCT_MAGIC: Final = 0x0D
@@ -171,6 +171,173 @@ class Packet:
         frame = header + body
         frame += struct.pack("<H", crc16(frame))
         return frame
+
+
+V4_VERSION: Final = 0x04
+
+
+@dataclass(slots=True)
+class PacketV4:
+    """A decoded EcoFlow V4 application packet.
+
+    V4 is a distinct wire format used by EcoFlow's newest devices -- not a
+    variant of V2/V3. The addressing fields live in an 8-byte *inner* command
+    header that is itself obfuscated, so the frame cannot be read with the
+    V2/V3 parser at all::
+
+        [0]     0xAA prefix
+        [1]     version (0x04)
+        [2:4]   payload length LE -- counts the inner header too
+        [4]     CRC8 of bytes 0..3, and the XOR key for everything from [8]
+        [5]     enc_type[7:5] | check_type[4:2] | is_rw_cmd[1] | is_ack[0]
+        [6]     v4_type_a
+        [7]     v4_type_b -- a second XOR key for the payload when non-zero
+        [8:16]  inner header: cmd_flags, frame_type, payload_type, time_snap,
+                src, dst, cmd_set, cmd_id   (XOR'd with the CRC8 byte)
+        [16:]   payload (XOR'd with the CRC8 byte, then with v4_type_b)
+        [-2:]   CRC16 LE over the obfuscated bytes
+
+    Note this is only used to *read* frames. Outgoing packets keep the V2/V3
+    serialisation even when the configured version is 4, matching the reference
+    implementation: the handshake stage is not V4-framed.
+    """
+
+    src: int
+    dst: int
+    cmd_set: int
+    cmd_id: int
+    payload: bytes = b""
+    enc_type: int = 0
+    check_type: int = 0
+    is_rw_cmd: bool = False
+    is_ack: bool = False
+    frame_type: int = 0
+    payload_type: int = 0
+    cmd_flags: int = 0x20
+    v4_type_a: int = 0
+    v4_type_b: int = 0
+    time_snap_b0: int = 0
+
+    #: Bytes before the obfuscated inner header. ClassVar, not a field: a
+    #: slots dataclass would otherwise turn these into per-instance values.
+    HEADER_LEN: ClassVar[int] = 8
+    #: Size of the inner command header, counted inside ``payload length``.
+    INNER_LEN: ClassVar[int] = 8
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> PacketV4:
+        """Decode a single complete V4 frame. Raises :class:`PacketError`."""
+        if len(data) < 18 or data[0] != _PREFIX:
+            raise PacketError(f"bad V4 frame: {data[:8].hex()}")
+
+        payload_length = struct.unpack_from("<H", data, 2)[0]
+        if len(data) != cls.HEADER_LEN + payload_length + 2:
+            raise PacketError(
+                f"V4 length mismatch: got {len(data)}, "
+                f"expected {cls.HEADER_LEN + payload_length + 2}"
+            )
+        if payload_length < cls.INNER_LEN:
+            raise PacketError(f"V4 payload too short: {payload_length}")
+        if crc8(data[:4]) != data[4]:
+            raise PacketError("V4 header CRC8 mismatch")
+        if crc16(data[:-2]) != struct.unpack_from("<H", data, len(data) - 2)[0]:
+            raise PacketError("V4 frame CRC16 mismatch")
+
+        type_byte = data[5]
+        v4_type_b = data[7]
+
+        # The header CRC8 doubles as the obfuscation key for everything after it.
+        xor_key = data[4]
+        body = bytes(b ^ xor_key for b in data[8 : 8 + payload_length])
+
+        payload = body[cls.INNER_LEN :]
+        if v4_type_b:
+            # A second obfuscation layer, applied to the application payload only.
+            payload = bytes(b ^ v4_type_b for b in payload)
+
+        return cls(
+            src=body[4],
+            dst=body[5],
+            cmd_set=body[6],
+            cmd_id=body[7],
+            payload=payload,
+            enc_type=(type_byte >> 5) & 0x7,
+            check_type=(type_byte >> 2) & 0x7,
+            is_rw_cmd=bool((type_byte >> 1) & 0x1),
+            is_ack=bool(type_byte & 0x1),
+            cmd_flags=body[0],
+            frame_type=body[1],
+            payload_type=body[2],
+            time_snap_b0=body[3],
+            v4_type_a=data[6],
+            v4_type_b=v4_type_b,
+        )
+
+    def to_bytes(self) -> bytes:
+        """Serialize to a complete V4 frame."""
+        inner = bytes(
+            [
+                self.cmd_flags,
+                self.frame_type,
+                self.payload_type,
+                self.time_snap_b0,
+                self.src,
+                self.dst,
+                self.cmd_set,
+                self.cmd_id,
+            ]
+        )
+        type_byte = (
+            ((self.enc_type & 0x7) << 5)
+            | ((self.check_type & 0x7) << 2)
+            | (int(self.is_rw_cmd) << 1)
+            | int(self.is_ack)
+        )
+        header = bytes([_PREFIX, V4_VERSION]) + struct.pack(
+            "<H", self.INNER_LEN + len(self.payload)
+        )
+        xor_key = crc8(header)
+        header += bytes([xor_key, type_byte, self.v4_type_a, self.v4_type_b])
+
+        payload = self.payload
+        if self.v4_type_b:
+            payload = bytes(b ^ self.v4_type_b for b in payload)
+        frame = header + bytes(b ^ xor_key for b in inner + payload)
+        return frame + struct.pack("<H", crc16(frame))
+
+    def as_packet(self) -> Packet:
+        """Adapt to a :class:`Packet` so model drivers need not know about V4."""
+        return Packet(
+            src=self.src,
+            dst=self.dst,
+            cmd_set=self.cmd_set,
+            cmd_id=self.cmd_id,
+            payload=self.payload,
+            version=V4_VERSION,
+        )
+
+
+def frame_length(data: bytes) -> int | None:
+    """Total length of the frame starting at ``data``, or None if not yet known.
+
+    Every generation puts a length at bytes 2-3 but counts different things:
+    V4 counts from the inner header, V2/V3 count the payload alone and differ
+    from each other by the two dsrc/ddst bytes.
+    """
+    if len(data) < 4:
+        return None
+    length = struct.unpack_from("<H", data, 2)[0]
+    version = data[1]
+    if version == V4_VERSION:
+        return PacketV4.HEADER_LEN + length + 2
+    return (16 if (version & 0x0F) == 2 else 18) + length + 2
+
+
+def parse_frame(data: bytes, *, xor_payload: bool = False) -> Packet:
+    """Decode one frame of any generation into a :class:`Packet`."""
+    if len(data) > 1 and data[1] == V4_VERSION:
+        return PacketV4.from_bytes(data).as_packet()
+    return Packet.from_bytes(data, xor_payload=xor_payload)
 
 
 # --------------------------------------------------------------------------- #

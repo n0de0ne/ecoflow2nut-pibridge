@@ -192,10 +192,36 @@ implementation (whose prefixes are `EF-R33`, `EF-R35`, `EF-D3`, `EF-R3`,
 **not** aliased to a generation in `devices.py`: guessing would point a real
 device at the wrong protocol silently. Identify it with `probe`, then `sniff`.
 
-Note EcoFlow also has a **V4** frame format (a different wire layout with two
-XOR obfuscation layers over the inner command header) which this bridge does
-not implement. If no version this bridge offers keeps the link up, V4 is the
-likely explanation.
+### V4 framing
+
+EcoFlow's newest devices use a **V4** frame, a different layout rather than a
+V2/V3 variant: the addressing lives in an 8-byte *inner* header that is itself
+XOR'd with the header CRC8 byte, and the application payload is XOR'd a second
+time with `v4_type_b` when that is non-zero. `protocol.PacketV4` reads and
+writes it (verified byte-for-byte against the reference codec).
+
+Only *reading* uses V4. Outgoing packets keep V2/V3 serialisation even when the
+configured version is 4 — the handshake stage is not V4-framed, matching the
+reference implementation.
+
+### When every frame version behaves identically
+
+If v2, v3 and v4 all fail the same way, **the frame version is not the
+problem** — it only affects the auth packet, so a real framing mismatch would
+change the symptom. Look instead at causes that are version-independent:
+
+1. **Another BLE client holds the device.** EcoFlow stations accept exactly one
+   connection at a time, and the phone app grabs it whenever it is running —
+   including backgrounded on iOS. Force-quit it everywhere, or disable that
+   phone's Bluetooth, before testing.
+2. **Wrong `user_id`.** Authentication is `md5(user_id + serial)`; an id from a
+   different EcoFlow account fails for every frame version.
+3. **Wrong or unavailable serial.** An *unidentified* device is exactly the case
+   where a serial derived from the advertisement may be wrong — and the auth
+   hash needs the full serial, not the four characters in the BLE name.
+4. **`encrypt_type` mismatch.** Anything that is not 0 or 1 is treated as the
+   type-7 ECDH exchange; a device using something else fails during session-key
+   negotiation, before the auth packet is ever sent.
 
 ## Verifying a device against this implementation
 

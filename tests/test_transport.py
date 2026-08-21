@@ -7,10 +7,13 @@ DELTA 2 generation carry no dsrc/ddst, so they are two bytes shorter than the
 V3 frames of the DELTA 3 generation.
 """
 
+from dataclasses import fields
+
 import pytest
 
+from ecoflow_nut import protocol
 from ecoflow_nut.ble_client import PassthroughAssembler
-from ecoflow_nut.protocol import Packet
+from ecoflow_nut.protocol import Packet, PacketError, PacketV4
 
 
 def _frame(version: int, payload: bytes) -> bytes:
@@ -68,3 +71,56 @@ def test_reassembled_frames_parse_back_to_the_original_packet(version):
     packet = Packet.from_bytes(raw)
     assert (packet.src, packet.cmd_set, packet.cmd_id) == (0x03, 0x20, 0x02)
     assert packet.payload == payload
+
+
+# --------------------------------------------------------------------------- #
+# V4 framing
+# --------------------------------------------------------------------------- #
+def _v4(payload: bytes, **kw) -> PacketV4:
+    return PacketV4(src=0x03, dst=0x21, cmd_set=0x20, cmd_id=0x02, payload=payload, **kw)
+
+
+@pytest.mark.parametrize("v4_type_b", [0x00, 0x5A, 0xC3])
+def test_v4_roundtrip_including_the_second_xor_layer(v4_type_b):
+    """V4 obfuscates twice: everything past the header with the CRC8 byte, then
+    the payload again with v4_type_b when it is non-zero."""
+    packet = _v4(bytes(range(40)), v4_type_b=v4_type_b)
+    decoded = PacketV4.from_bytes(packet.to_bytes())
+    assert (decoded.src, decoded.dst) == (0x03, 0x21)
+    assert (decoded.cmd_set, decoded.cmd_id) == (0x20, 0x02)
+    assert decoded.payload == bytes(range(40))
+    assert decoded.v4_type_b == v4_type_b
+
+
+def test_v4_addressing_is_not_readable_as_plaintext():
+    """The inner header is obfuscated, so a V2/V3 parser cannot find src/dst."""
+    raw = _v4(b"\x00" * 8, v4_type_b=0x11).to_bytes()
+    # Bytes 12/13 are where V2/V3 keep src/dst; in V4 they are XOR'd payload.
+    assert (raw[12], raw[13]) != (0x03, 0x21)
+
+
+def test_v4_length_and_dispatch():
+    raw = _v4(bytes(12)).to_bytes()
+    # V4 counts the 8-byte inner header inside its length field.
+    assert protocol.frame_length(raw) == len(raw) == 8 + (8 + 12) + 2
+    packet = protocol.parse_frame(raw)
+    assert packet.version == protocol.V4_VERSION
+    assert (packet.src, packet.cmd_set, packet.cmd_id) == (0x03, 0x20, 0x02)
+
+
+def test_v4_rejects_corrupt_frames():
+    raw = bytearray(_v4(bytes(8)).to_bytes())
+    raw[-1] ^= 0xFF
+    with pytest.raises(PacketError):
+        PacketV4.from_bytes(bytes(raw))
+
+
+def test_v4_frames_reassemble_from_a_byte_stream():
+    first, second = _v4(b"\x01" * 10).to_bytes(), _v4(b"\x02" * 20).to_bytes()
+    assert PassthroughAssembler().reassemble(first + second) == [first, second]
+
+
+def test_v4_constants_are_not_dataclass_fields():
+    """HEADER_LEN/INNER_LEN must stay ClassVars, not per-instance values."""
+    assert "HEADER_LEN" not in {f.name for f in fields(PacketV4)}
+    assert "INNER_LEN" not in {f.name for f in fields(PacketV4)}

@@ -173,7 +173,7 @@ def probe(ctx: click.Context, seconds: int) -> None:
 
 # Candidate frame versions, most likely first: every modern EcoFlow device uses
 # V3; only the DELTA 2 generation, River 2 and Wave 2 still speak V2.
-PROBE_VERSIONS = (3, 2)
+PROBE_VERSIONS = (3, 2, 4)
 
 
 async def _probe(config: Config, seconds: int) -> None:
