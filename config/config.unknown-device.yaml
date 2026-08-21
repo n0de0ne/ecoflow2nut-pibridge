@@ -1,0 +1,46 @@
+# Diagnostic config for identifying an UNKNOWN EcoFlow device.
+#
+# Not a working bridge config: 'model: raw' connects and captures but decodes
+# nothing, so the daemon would publish no telemetry. Use it with the scan /
+# probe / sniff commands to work out what the device actually speaks, then
+# switch 'model' to the generation you identified.
+#
+#   ecoflow-nut --config config/config.unknown-device.yaml scan
+#   ecoflow-nut --config config/config.unknown-device.yaml probe
+#   ecoflow-nut --config config/config.unknown-device.yaml sniff --out frames.jsonl
+
+ecoflow:
+  # BLE MAC from 'scan' (or from the Home Assistant device page).
+  mac: "DC:06:75:A8:3E:29"
+
+  # FULL serial number, from the sticker on the unit or the EcoFlow app.
+  # Authentication is md5(user_id + serial), so a truncated or wrong serial
+  # fails for every frame version -- the BLE name only carries the last four
+  # characters, which is NOT enough.
+  serial: "REPLACE-WITH-FULL-SERIAL"
+
+  # EcoFlow account user id. Must be the account this device is registered to.
+  user_id: "REPLACE-WITH-USER-ID"
+
+  # 'raw' = connect and capture only, make no assumptions about the protocol.
+  model: "raw"
+
+  # Leave unset so 'probe' can sweep versions; pin it once probe finds one.
+  # packet_version: 3
+
+  # "auto" reads the type from the BLE advertisement. If the handshake stalls,
+  # try forcing 0 or 1 -- anything else is treated as the type-7 ECDH exchange.
+  encrypt_type: "auto"
+
+ble:
+  adapter: "hci0"
+  connect_timeout_seconds: 30
+  scan_timeout_seconds: 30
+
+logging:
+  level: "DEBUG"     # shows each handshake step, which is the point here
+  format: "console"
+
+nut:
+  # Harmless placeholders; nothing writes NUT state in this mode.
+  dev_file_path: "/tmp/ecoflow-diag.dev"

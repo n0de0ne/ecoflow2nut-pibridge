@@ -59,9 +59,16 @@ def test_parse_control_command_rejects(line):
         parse_control_command(line)
 
 
-def test_every_driver_builds_every_output_kind():
+def test_every_protocol_driver_builds_every_output_kind():
+    """Every driver that claims to know a protocol must support all outputs.
+
+    ``raw`` is excluded deliberately: it exists for devices whose protocol is
+    unknown, so it refuses control rather than send a guessed opcode.
+    """
     assert set(OUTPUT_KINDS) == {"ac", "usb", "dc"}
-    for name, driver in DRIVERS.items():
+    protocol_drivers = {n: d for n, d in DRIVERS.items() if n != "raw"}
+    assert protocol_drivers, "expected at least one real protocol driver"
+    for name, driver in protocol_drivers.items():
         for kind in OUTPUT_KINDS:
             for enabled in (True, False):
                 packet = driver.output_packet(kind, enabled)

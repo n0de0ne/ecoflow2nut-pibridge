@@ -318,3 +318,36 @@ def test_layout_coverage_flags_unmapped_trailing_bytes():
 def test_layout_coverage_silent_on_an_exact_match():
     exact = rawstruct.pack(delta2.INV_DELTA, {})
     assert sniffer.layout_coverage(delta2.DELTA2_MAX, _frame(0x04, 0x02, exact)) is None
+
+
+# --------------------------------------------------------------------------- #
+# Raw (unidentified device) driver
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("model", ["raw", "unknown", "unsupported"])
+def test_raw_driver_is_reachable_for_unidentified_devices(model):
+    assert devices.get_driver(model).name == "raw"
+
+
+def test_raw_driver_decodes_nothing_but_still_lets_frames_through():
+    """It must not claim frames: the sniffer shows them, the state stays empty."""
+    driver = devices.get_driver("raw")
+    state = DeviceState()
+    payload = rawstruct.pack(delta2.EMS_HEARTBEAT, {"f32_lcd_show_soc": 50.0})
+    assert driver.handle_packet(state, _frame(0x03, 0x02, payload)) is False
+    assert state.soc_percent is None
+
+
+def test_raw_driver_refuses_control_rather_than_guessing_an_opcode():
+    driver = devices.get_driver("raw")
+    for kind in devices.OUTPUT_KINDS:
+        with pytest.raises(ValueError, match="no control opcodes"):
+            driver.output_packet(kind, True)
+
+
+def test_raw_driver_defaults_are_the_safe_ones_for_an_unknown_device():
+    driver = devices.get_driver("raw")
+    # V3 is the majority default across EcoFlow's range...
+    assert driver.packet_version == 3
+    # ...and de-obfuscating a device that does not obfuscate would turn good
+    # frames into noise, hiding the very thing a capture is meant to reveal.
+    assert driver.xor_payload is False

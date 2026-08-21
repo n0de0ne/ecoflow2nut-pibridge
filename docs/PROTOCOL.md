@@ -223,6 +223,57 @@ change the symptom. Look instead at causes that are version-independent:
    type-7 ECDH exchange; a device using something else fails during session-key
    negotiation, before the auth packet is ever sent.
 
+## Bluetooth proxies are not a supported transport
+
+This bridge talks to a **local** Bluetooth adapter through BlueZ/bleak. It does
+not go through an ESPHome/ESP32 Bluetooth proxy, and that is deliberate:
+
+* An ESP32 proxy offers **3 active connection slots** by default. EcoFlow
+  stations hold a *continuous* connection, so each one occupies a slot
+  permanently — a few devices exhaust the pool and nothing else can connect.
+* The type-7 handshake uses **write-with-response**, which is exactly the
+  operation known to stall through a proxy. The reference implementation caps
+  its disconnect timeout specifically because of this ("notably through an
+  ESPHome proxy"), and its own docs report dropped packets for EcoFlow devices
+  over proxies.
+
+A stall there lands *mid-authentication* and is therefore **identical at every
+frame version** — a useful discriminator: if v2, v3 and v4 all behave the same
+through a proxy, suspect the transport, not the protocol. Run the bridge on a
+host with its own radio (a Pi) before concluding a device is unsupported.
+
+## Identifying an unknown device on real hardware
+
+`config/config.unknown-device.yaml` is a ready-made diagnostic config using
+`model: raw` — connect and capture, decode nothing, assume nothing:
+
+```bash
+# 1. Confirm the device is advertising, and read its encrypt_type.
+ecoflow-nut --config config/config.unknown-device.yaml scan
+
+# 2. Find a frame version that authenticates and holds the link.
+ecoflow-nut --config config/config.unknown-device.yaml probe
+
+# 3. Capture whatever it sends.
+ecoflow-nut --config config/config.unknown-device.yaml sniff --out frames.jsonl
+```
+
+The config sets `logging.level: DEBUG`, so the handshake is logged step by step
+(`ble.found` with the encrypt_type, `ble.handshake_start`, `ecdh.step1_*`,
+`ecdh.step2_*`, `ble.authenticated`). **Where the log stops is the diagnosis**:
+
+| Last line seen | Meaning |
+|----------------|---------|
+| `ble.scanning` only | Device not advertising — it is asleep, or another client already holds it |
+| `ble.connected`, then nothing | Handshake stalled; suspect the transport or `encrypt_type` |
+| `ecdh.step1_resp` then stops | Public-key exchange rejected — `encrypt_type` is probably not 7 |
+| `ecdh.step2_session_key_ok` then stops | Session established, credentials rejected — check `serial` and `user_id` |
+| `ble.authenticated` | Auth succeeded; anything after is a decoding problem, not a connection one |
+
+Remember the device accepts **one** BLE client at a time: close the EcoFlow
+phone app (fully — backgrounded on iOS still holds the link) and stop any other
+integration that might be connected before testing.
+
 ## Verifying a device against this implementation
 
 `ecoflow-nut sniff` connects like the daemon does and reports **every** frame

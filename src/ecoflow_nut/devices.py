@@ -10,6 +10,9 @@ bridge needs to know which one it is talking to *before* the first frame arrives
 ``delta2max`` / ``delta2``
     The DELTA 2 generation -- V2 frames, fixed-width binary heartbeats, per-
     function control opcodes. See :mod:`ecoflow_nut.delta2`.
+``raw``
+    Not a protocol: connect and capture only, for a device we cannot identify
+    yet. Lets ``probe``/``sniff`` work on an unknown unit without guessing.
 
 Selection is by configuration, deliberately **not** by serial-number prefix.
 Upstream projects gate on a hardcoded list of prefixes, so a regional or
@@ -20,6 +23,7 @@ unrecognised serial from locking anyone out.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from . import delta2, delta3
@@ -67,11 +71,43 @@ class DeviceDriver(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class RawDriver:
+    """A driver for a device whose protocol is not known yet.
+
+    Connects and authenticates like any other model but decodes nothing, so
+    ``scan``/``probe``/``sniff`` can be pointed at an unidentified unit without
+    pretending to understand its telemetry. Frames still reach the sniffer,
+    which is what makes a capture possible in the first place.
+
+    Not usable for the daemon: it publishes no telemetry (the watchdog will
+    restart it) and refuses control commands rather than send a guessed opcode
+    at hardware.
+    """
+
+    name: str = "raw"
+    #: V3 is the majority default; override with ``ecoflow.packet_version``.
+    packet_version: int = 3
+    #: Off by default -- de-obfuscating a device that does not obfuscate turns
+    #: good frames into noise, and the sniffer should show what actually arrived.
+    xor_payload: bool = False
+
+    def handle_packet(self, state: DeviceState, packet: Packet) -> bool:
+        return False
+
+    def output_packet(self, kind: str, enabled: bool) -> Packet:
+        raise ValueError(
+            f"cannot control {kind!r}: ecoflow.model is 'raw', so no control "
+            "opcodes are known for this device. Identify it with 'sniff' first."
+        )
+
+
 # Canonical model name -> driver.
 DRIVERS: dict[str, DeviceDriver] = {
     "delta3": delta3.DRIVER,
     "delta2": delta2.DELTA2,
     "delta2max": delta2.DELTA2_MAX,
+    "raw": RawDriver(),
 }
 
 # Spellings people reasonably write in config.yaml, and the product codes
@@ -105,6 +141,9 @@ ALIASES = {
     "p231": "delta3",
     "river3": "delta3",
     "delta3plus": "delta3",
+    # Diagnostic: a device we cannot name yet (see RawDriver).
+    "unknown": "raw",
+    "unsupported": "raw",
 }
 
 
