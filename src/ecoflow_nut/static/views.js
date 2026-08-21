@@ -66,6 +66,13 @@ function renderPorts(s) {
 
 function renderState(s) {
   if (!s) return;
+  if (s.device_model) {
+    const heading = el("#deviceModel");
+    if (heading && heading.textContent !== s.device_model) {
+      heading.textContent = s.device_model;
+      document.title = `${s.device_model} · Bridge`;
+    }
+  }
   const num = (id, value) => { el(id).textContent = value; };
   num("#soc", s.soc_percent ?? "–");
   el("#socFill").style.width = `${s.soc_percent ?? 0}%`;
@@ -137,11 +144,11 @@ export function applyControlLock() {
 }
 
 async function control(output, enabled) {
-  // Guard: turning USB off can kill a Pi powered from the DELTA 3's USB port.
+  // Guard: turning USB off can kill a Pi powered from the station's USB port.
   if (output === "usb" && !enabled) {
     const ok = confirm(
       "Turn the USB output OFF?\n\n" +
-      "If this bridge (e.g. a Raspberry Pi) is powered from the DELTA 3's USB " +
+      "If this bridge (e.g. a Raspberry Pi) is powered from the station's USB " +
       "port, this cuts its OWN power — the dashboard and the bridge will go " +
       "down.\n\nContinue only if you are sure nothing critical runs off USB.");
     if (!ok) return;

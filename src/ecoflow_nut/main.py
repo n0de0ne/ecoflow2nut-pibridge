@@ -265,6 +265,9 @@ class Daemon:
         common = {
             "server_time": time.time(),
             "poll_interval_seconds": self._config.ecoflow.poll_interval_seconds,
+            # The bridge drives several models, so the UI names the configured
+            # one rather than hardcoding a device the user may not own.
+            "device_model": self._config.nut.static_values.model,
         }
         if s is None:
             return {

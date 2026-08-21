@@ -115,7 +115,10 @@ async def test_index_served(secured: TestClient) -> None:
     resp = await secured.get("/")
     assert resp.status == 200
     body = await resp.text()
-    assert "EcoFlow DELTA 3" in body
+    # The shell ships a model-agnostic heading; the configured model name is
+    # filled in from /api/state, since the bridge drives several models.
+    assert 'id="deviceModel"' in body
+    assert "EcoFlow" in body
     # Visual port + auto-shutdown status indicators are present.
     for marker in ('id="stAc"', 'id="stUsb"', 'id="stDc"', 'id="asLed"'):
         assert marker in body
