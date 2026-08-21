@@ -56,6 +56,27 @@ logging:
 control_socket_path: "/var/run/nut/ecoflow-nut.sock"
 settings_file: "/var/lib/ecoflow-nut/settings.json"
 
+# Web dashboard (live telemetry + control). Set enabled: true and restart, then
+# open http://<pi-ip>:8080. aiohttp is already installed by systemd/install.sh.
+# Without an auth_token the dashboard is read-only -- viewing needs no secret,
+# but toggling outputs does. Prefer the ECOFLOW_WEB_TOKEN env var over this file.
+web:
+  enabled: false
+  host: "0.0.0.0"
+  port: 8080
+  auth_token: ""
+  require_auth_for_read: false
+
+# Local telemetry history, for the dashboard's charts. Self-contained (stdlib
+# sqlite3), so nothing extra to install. min_interval_seconds throttles rows
+# independently of the poll rate -- keep it well above 0 on an SD card.
+sqlite:
+  enabled: false
+  path: "/var/lib/ecoflow-nut/telemetry.db"
+  table: "ecoflow_samples"
+  min_interval_seconds: 30
+  retention_days: 90
+
 # Cutting output is destructive; opt in deliberately. KEEP cut_usb false if the
 # Pi is powered from the station's USB port.
 auto_shutdown:

@@ -18,7 +18,7 @@ from .ble_client import EcoFlowBLE
 from .config import Config, load_config
 from .devices import OUTPUT_KINDS, DeviceDriver
 from .eve_outlet import EveOutlet
-from .nut_writer import NutWriter
+from .nut_writer import NutWriter, derive_status
 from .settings_store import SettingsStore
 from .state import DeviceState
 from .switchbot import SwitchBot
@@ -426,12 +426,28 @@ class Daemon:
     def _on_state(self, state: DeviceState) -> None:
         if not state.is_complete:
             return
-        variables = self._writer.write(state)
         now = time.monotonic()
-        self._last_write_monotonic = now
-        status = variables.get("ups.status", "OB")
-        # Snapshot the latest values for the web UI and Postgres logger.
+        # Always keep the dashboard's snapshot live: it is just a reference.
         self._latest_state = state
+
+        # Republishing is throttled to poll_interval_seconds -- which is what
+        # that setting has always meant ("how often the NUT file is refreshed").
+        # It matters on the DELTA 2 generation, which streams several subsystem
+        # heartbeats per second rather than one periodic frame: rewriting the
+        # NUT file, logging and recording a sample on every one pegged a Pi
+        # Zero near 80% CPU and wrote to the SD card dozens of times a second.
+        status = derive_status(state, self._config.nut)
+        interval = max(0, self._config.ecoflow.poll_interval_seconds)
+        due = now - self._last_write_monotonic >= interval
+        # A status change is never delayed: an outage must reach NUT clients at
+        # once, not up to poll_interval_seconds later.
+        if not due and status == self._latest_status:
+            return
+
+        variables = self._writer.write(state)
+        self._last_write_monotonic = now
+        status = variables.get("ups.status", status)
+        # Snapshot the latest values for the web UI and Postgres logger.
         self._latest_status = status
         self._latest_runtime = int(variables.get("battery.runtime", "0"))
         self._latest_update_monotonic = now
