@@ -206,17 +206,7 @@ async def test_manual_override_cancels_the_wait(tmp_path: Path) -> None:
     assert daemon._eve_state is False
 
 
-async def test_watchdog_disconnects_before_exiting(tmp_path, monkeypatch):
-    """A hard exit strands the BLE link, and the device goes off-air.
-
-    BlueZ keeps a connection the process never closed; the device -- one client
-    at a time -- believes it still has one, stops advertising, and no scanner on
-    the host can see it again until it is power-cycled. That defeats the whole
-    point of a watchdog meant to recover unattended.
-    """
-    from ecoflow_nut.config import Config, EcoflowConfig
-    from ecoflow_nut.main import Daemon
-
+def _watchdog_daemon(tmp_path: Path) -> Daemon:
     config = Config(
         ecoflow=EcoflowConfig(
             mac="DC:06:75:A8:3E:29", serial="E201ZE1APH560861", model="e2000"
@@ -224,39 +214,84 @@ async def test_watchdog_disconnects_before_exiting(tmp_path, monkeypatch):
     )
     config.nut.dev_file_path = str(tmp_path / "ecoflow.dev")
     config.settings_file = str(tmp_path / "settings.json")
-    daemon = Daemon(config)
+    return Daemon(config)
 
-    disconnected: list[bool] = []
+
+def _hurry_the_watchdog(monkeypatch):
+    """Collapse the watchdog's tick, without starving the event loop.
+
+    Bind the real sleep first: the patch target is the shared ``asyncio``
+    module, so a replacement that called ``asyncio.sleep`` would recurse -- and
+    so a test that wants to wait for real needs the returned original, not the
+    patched name.
+    """
+    real_sleep = asyncio.sleep
+
+    async def _tick(_seconds: float) -> None:
+        await real_sleep(0)
+
+    monkeypatch.setattr("ecoflow_nut.main.asyncio.sleep", _tick)
+    return real_sleep
+
+
+async def test_watchdog_reconnects_before_it_restarts_the_process(tmp_path, monkeypatch):
+    """A quiet link is worth a reconnect before it is worth a restart.
+
+    Exiting costs the supervisor's backoff, a cold scan and a fresh handshake,
+    and races the device: a station that has just lost its only client needs a
+    moment before it advertises again. Reconnecting in-process is both cheaper
+    and likelier to work, so it has to be tried first.
+    """
+    from ecoflow_nut import main as main_mod
+
+    daemon = _watchdog_daemon(tmp_path)
+    disconnects: list[bool] = []
 
     class _Client:
         async def disconnect(self) -> None:
-            disconnected.append(True)
+            disconnects.append(True)
 
     daemon._active_client = _Client()  # type: ignore[assignment]
-    # Make the link look stale enough to trip the watchdog immediately.
+    # Make the link look stale enough to trip the watchdog immediately, and
+    # keep it stale: nothing here ever brings the telemetry back.
     daemon._last_write_monotonic = time.monotonic() - 10_000
-    monkeypatch.setattr("ecoflow_nut.main.asyncio.sleep", _no_sleep)
+    _hurry_the_watchdog(monkeypatch)
 
     with pytest.raises(SystemExit) as exc:
         await daemon._watchdog()
 
-    assert exc.value.code == 70, "still exits so the supervisor restarts us"
-    assert disconnected == [True], "the BLE link must be released first"
+    assert exc.value.code == 70, "gives up eventually so the supervisor restarts us"
+    assert len(disconnects) == main_mod.WATCHDOG_MAX_RECOVERIES + 1, (
+        "one release per reconnect attempt, plus one before exiting"
+    )
+
+
+async def test_watchdog_stands_down_once_the_link_recovers(tmp_path, monkeypatch):
+    """A reconnect that works must not still cost a restart."""
+    daemon = _watchdog_daemon(tmp_path)
+    disconnects: list[bool] = []
+
+    class _Client:
+        async def disconnect(self) -> None:
+            disconnects.append(True)
+            # Stand in for the run loop reconnecting and telemetry resuming.
+            daemon._last_write_monotonic = time.monotonic()
+
+    daemon._active_client = _Client()  # type: ignore[assignment]
+    daemon._last_write_monotonic = time.monotonic() - 10_000
+    real_sleep = _hurry_the_watchdog(monkeypatch)
+
+    task = asyncio.create_task(daemon._watchdog())
+    await real_sleep(0.2)  # thousands of ticks at the patched rate
+    assert not task.done(), "a recovered link must not be escalated to a restart"
+    assert disconnects == [True], "and must not be dropped again"
+    daemon._stop.set()
+    await asyncio.wait_for(task, timeout=5)
 
 
 async def test_watchdog_still_exits_if_the_disconnect_fails(tmp_path, monkeypatch):
     """A wedged link must not stop the restart -- exiting is the recovery."""
-    from ecoflow_nut.config import Config, EcoflowConfig
-    from ecoflow_nut.main import Daemon
-
-    config = Config(
-        ecoflow=EcoflowConfig(
-            mac="DC:06:75:A8:3E:29", serial="E201ZE1APH560861", model="e2000"
-        )
-    )
-    config.nut.dev_file_path = str(tmp_path / "ecoflow.dev")
-    config.settings_file = str(tmp_path / "settings.json")
-    daemon = Daemon(config)
+    daemon = _watchdog_daemon(tmp_path)
 
     class _StuckClient:
         async def disconnect(self) -> None:
@@ -264,12 +299,21 @@ async def test_watchdog_still_exits_if_the_disconnect_fails(tmp_path, monkeypatc
 
     daemon._active_client = _StuckClient()  # type: ignore[assignment]
     daemon._last_write_monotonic = time.monotonic() - 10_000
-    monkeypatch.setattr("ecoflow_nut.main.asyncio.sleep", _no_sleep)
+    _hurry_the_watchdog(monkeypatch)
 
     with pytest.raises(SystemExit) as exc:
         await daemon._watchdog()
     assert exc.value.code == 70
 
 
-async def _no_sleep(_seconds: float) -> None:
-    return None
+async def test_watchdog_escalates_when_there_is_nothing_to_disconnect(
+    tmp_path, monkeypatch
+):
+    """Stuck mid-reconnect with no client is exactly when the restart is due."""
+    daemon = _watchdog_daemon(tmp_path)
+    daemon._last_write_monotonic = time.monotonic() - 10_000
+    _hurry_the_watchdog(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc:
+        await daemon._watchdog()
+    assert exc.value.code == 70

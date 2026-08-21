@@ -28,9 +28,17 @@ from .switchbot import SwitchBot
 
 log = structlog.get_logger(__name__)
 
-# If no successful BLE read happens within this window, exit so the supervisor
-# (systemd / Docker) restarts us from a clean state.
+# How long telemetry may go quiet before the watchdog intervenes.
 WATCHDOG_TIMEOUT_SECONDS = 120
+# How often the watchdog looks.
+WATCHDOG_TICK_SECONDS = 5
+# Consecutive in-process reconnects to try before handing the problem to the
+# supervisor (systemd / Docker) for a restart from a clean state.
+WATCHDOG_MAX_RECOVERIES = 3
+# Ticks to wait after forcing a reconnect before judging whether it worked. A
+# cold reconnect is a scan plus a handshake -- tens of seconds -- and tearing
+# that down half-way would cause the very failure it is meant to repair.
+WATCHDOG_RECOVERY_HOLD_TICKS = 18
 # How often the retention window is applied. Deleting rows is cheap next to the
 # cost of scanning for them, so there is no reason to do it often.
 PRUNE_INTERVAL_SECONDS = 6 * 3600
@@ -745,34 +753,77 @@ class Daemon:
             await self._sleep_or_stop(PRUNE_INTERVAL_SECONDS)
 
     async def _watchdog(self) -> None:
+        """Recover a link that has gone quiet -- in-process first.
+
+        A stalled BLE stream used to exit the process and let the supervisor
+        start us over. That works, but it is the most expensive repair
+        available: ten seconds of restart backoff, a cold scan, a fresh
+        handshake, and every accumulated reading discarded -- to fix a fault
+        that dropping and re-establishing the link fixes on its own. Worse, the
+        restart races the device: a station that has just lost its one client
+        needs a moment to advertise again, and a process that exits and
+        immediately rescans tends to miss that window and report the device
+        missing entirely.
+
+        So reconnect first, and keep the hard exit for what reconnecting cannot
+        fix -- a wedged adapter, where only a clean process (or a clean host)
+        will do.
+        """
+        recoveries = 0
+        hold = 0
         while not self._stop.is_set():
-            await asyncio.sleep(5)
+            await asyncio.sleep(WATCHDOG_TICK_SECONDS)
             stale = time.monotonic() - self._last_write_monotonic
-            if stale > WATCHDOG_TIMEOUT_SECONDS:
-                log.critical("daemon.watchdog_timeout", stale_seconds=round(stale))
+            if stale <= WATCHDOG_TIMEOUT_SECONDS:
+                # Telemetry is flowing; whatever we last did, it worked.
+                recoveries = 0
+                hold = 0
+                continue
+            if hold > 0:
+                # A reconnect is in flight. Give it room.
+                hold -= 1
+                continue
+            recoveries += 1
+            if recoveries > WATCHDOG_MAX_RECOVERIES:
+                log.critical(
+                    "daemon.watchdog_timeout",
+                    stale_seconds=round(stale),
+                    recoveries=recoveries - 1,
+                )
                 self._stop.set()
-                await self._force_disconnect()
+                await self._release_link()
                 # Hard-exit so the supervisor restarts us.
                 sys.exit(70)
+            log.warning(
+                "daemon.watchdog_reconnect",
+                stale_seconds=round(stale),
+                attempt=recoveries,
+                of=WATCHDOG_MAX_RECOVERIES,
+            )
+            # Dropping the link is the whole intervention: the poll loop sees
+            # the connection go, returns, and the run loop reconnects.
+            await self._release_link()
+            hold = WATCHDOG_RECOVERY_HOLD_TICKS
 
-    async def _force_disconnect(self) -> None:
-        """Tear the BLE link down before the watchdog kills the process.
+    async def _release_link(self) -> None:
+        """Tear the BLE link down, whether we are retrying or exiting.
 
-        Exiting without this leaves BlueZ holding the connection. The device --
-        which accepts one client at a time -- then believes it still has one, so
-        it stops advertising and becomes invisible to every scanner on the host,
-        not just to us. Nothing can reach it again until it is power-cycled,
-        which is a miserable failure mode for a watchdog whose whole job is to
-        recover automatically.
+        Dropping it without this -- and in particular exiting without it --
+        leaves BlueZ holding the connection. The device, which accepts one
+        client at a time, then believes it still has one, so it stops
+        advertising and becomes invisible to every scanner on the host, not
+        just to us. Nothing can reach it again until it is power-cycled, which
+        is a miserable failure mode for a watchdog whose whole job is to
+        recover unattended.
         """
         client = self._active_client
         if client is None:
             return
         try:
             await asyncio.wait_for(client.disconnect(), timeout=5)
-            log.info("daemon.watchdog_disconnected")
-        except Exception as exc:  # noqa: BLE001 - we are exiting regardless
-            log.warning("daemon.watchdog_disconnect_failed", error=str(exc))
+            log.info("daemon.link_released")
+        except Exception as exc:  # noqa: BLE001 - recovering regardless
+            log.warning("daemon.link_release_failed", error=str(exc))
 
     async def _sleep_or_stop(self, seconds: float) -> None:
         try:

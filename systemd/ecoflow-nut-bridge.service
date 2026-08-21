@@ -6,6 +6,12 @@ Wants=bluetooth.target
 # before the driver reads it. install.sh also adds a matching After= drop-in to
 # nut-server so the ordering holds from both sides.
 Before=nut-server.service
+# Never latch the bridge off. systemd's default start-rate limit gives up on a
+# repeatedly failing unit for good, which for an unattended UPS bridge is the
+# one outcome worse than restarting: a device that is merely unreachable for a
+# while (unplugged, out of range, firmware update) would need a human to start
+# it again once it came back.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
