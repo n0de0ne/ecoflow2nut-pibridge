@@ -71,6 +71,12 @@ class NutConfig:
     input_transfer_low: int = 200
     input_transfer_high: int = 250
     ac_input_present_min_watts: int = 10
+    # Minimum seconds between rewrites of the dummy-ups state file. The
+    # DELTA 2 generation streams several subsystem heartbeats per second,
+    # and rewriting on each one is pure waste: NUT's own dummy-ups driver
+    # re-reads at ups.conf's pollinterval (2s by default). A status change
+    # is always published immediately, whatever this is set to.
+    min_write_interval_seconds: float = 2.0
     # Volts at the AC input above which the mains count as present, on models
     # that measure it (the DELTA 2 generation). Well below any nominal supply
     # (100/120/230 V) and well above sensor noise.

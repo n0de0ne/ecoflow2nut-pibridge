@@ -132,7 +132,7 @@ def test_usb_watt_fields_decode_from_a_real_frame():
     assert fields[delta3.F_POW_GET_QCUSB1] == pytest.approx(0.0)
     assert fields[delta3.F_POW_GET_TYPEC1] == pytest.approx(0.0)
     state = DeviceState()
-    state.merge_display_payload(packet.payload)
+    delta3.merge_display_payload(state, packet.payload)
     assert state.usb_output_watts == pytest.approx(0.0)
     assert state.usbc_output_watts == pytest.approx(0.0)
 
@@ -155,14 +155,14 @@ def test_second_usb_port_is_counted():
     0 W and "idle/off" while the EcoFlow app reported the port drawing. On a real
     DELTA 3 the draw arrived on field 12 with 9/10/11 all at 0.0."""
     state = DeviceState()
-    state.merge_display_payload(_usb_payload(a1=0.0, a2=0.0, c1=0.0, c2=-1.0))
+    delta3.merge_display_payload(state, _usb_payload(a1=0.0, a2=0.0, c1=0.0, c2=-1.0))
     assert state.usbc_output_watts == pytest.approx(1.0)
     assert state.usb_output_watts == pytest.approx(0.0)
 
 
 def test_usb_ports_of_the_same_type_are_summed():
     state = DeviceState()
-    state.merge_display_payload(_usb_payload(a1=-2.5, a2=-1.5, c1=-3.0, c2=-1.0))
+    delta3.merge_display_payload(state, _usb_payload(a1=-2.5, a2=-1.5, c1=-3.0, c2=-1.0))
     assert state.usb_output_watts == pytest.approx(4.0)
     assert state.usbc_output_watts == pytest.approx(4.0)
 
@@ -171,20 +171,20 @@ def test_a_partial_frame_does_not_zero_an_unmentioned_port():
     """Frames carry only what changed, so summing just what arrived would drop a
     port's last-known draw the moment a frame omitted it."""
     state = DeviceState()
-    state.merge_display_payload(_usb_payload(c1=0.0, c2=-1.0))
+    delta3.merge_display_payload(state, _usb_payload(c1=0.0, c2=-1.0))
     assert state.usbc_output_watts == pytest.approx(1.0)
     # A later frame mentions only port 1; port 2 is still drawing.
-    state.merge_display_payload(_usb_payload(c1=0.0))
+    delta3.merge_display_payload(state, _usb_payload(c1=0.0))
     assert state.usbc_output_watts == pytest.approx(1.0)
     # And when port 2 genuinely drops to zero, the total follows.
-    state.merge_display_payload(_usb_payload(c2=0.0))
+    delta3.merge_display_payload(state, _usb_payload(c2=0.0))
     assert state.usbc_output_watts == pytest.approx(0.0)
 
 
 def test_usb_totals_stay_none_until_a_port_reports():
     """ "Not reported" must read differently from "reported zero"."""
     state = DeviceState()
-    state.merge_display_payload(encode_message([]))
+    delta3.merge_display_payload(state, encode_message([]))
     assert state.usb_output_watts is None
     assert state.usbc_output_watts is None
 
@@ -217,7 +217,7 @@ def _flags_payload(**flags: int) -> bytes:
 def test_port_flags_decode_from_real_device_values():
     """Values observed on a real DELTA 3: USB and AC active at 14, 12V off at 4."""
     state = DeviceState()
-    state.merge_display_payload(_flags_payload(usb_a1=14, ac_out=14, dc=4))
+    delta3.merge_display_payload(state, _flags_payload(usb_a1=14, ac_out=14, dc=4))
     assert state.usb_output_on is True
     assert state.ac_output_on is True
     assert state.dc_output_on is False
@@ -226,7 +226,7 @@ def test_port_flags_decode_from_real_device_values():
 def test_ac_output_off_is_not_read_as_on():
     """Regression: ac_output_on used bool(), so an inactive 4 read as ON."""
     state = DeviceState()
-    state.merge_display_payload(_flags_payload(ac_out=4))
+    delta3.merge_display_payload(state, _flags_payload(ac_out=4))
     assert state.ac_output_on is False
 
 
@@ -234,15 +234,15 @@ def test_any_usb_port_flag_answers_for_the_master_switch():
     """One switch drives all four ports, and frames are partial -- whichever
     port's flag arrives has to be enough."""
     state = DeviceState()
-    state.merge_display_payload(_flags_payload(usb_c2=14))
+    delta3.merge_display_payload(state, _flags_payload(usb_c2=14))
     assert state.usb_output_on is True
-    state.merge_display_payload(_flags_payload(usb_a1=4))
+    delta3.merge_display_payload(state, _flags_payload(usb_a1=4))
     assert state.usb_output_on is False
 
 
 def test_port_flags_stay_none_until_reported():
     state = DeviceState()
-    state.merge_display_payload(encode_message([]))
+    delta3.merge_display_payload(state, encode_message([]))
     assert state.usb_output_on is None
     assert state.dc_output_on is None
 

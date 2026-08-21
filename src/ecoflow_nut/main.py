@@ -489,17 +489,16 @@ class Daemon:
         # Always keep the dashboard's snapshot live: it is just a reference.
         self._latest_state = state
 
-        # Republishing is throttled to poll_interval_seconds -- which is what
-        # that setting has always meant ("how often the NUT file is refreshed").
-        # It matters on the DELTA 2 generation, which streams several subsystem
-        # heartbeats per second rather than one periodic frame: rewriting the
-        # NUT file, logging and recording a sample on every one pegged a Pi
-        # Zero near 80% CPU and wrote to the SD card dozens of times a second.
+        # Rewriting the NUT file on every frame pegged a Pi Zero near 80% CPU
+        # against a DELTA 2 generation device, which streams several subsystem
+        # heartbeats per second where the DELTA 3 sends one periodic frame --
+        # dozens of atomic file rewrites a second, for data NUT re-reads every
+        # two. (poll_interval_seconds is the BLE link watchdog, not this.)
         status = derive_status(state, self._config.nut)
-        interval = max(0, self._config.ecoflow.poll_interval_seconds)
+        interval = max(0.0, self._config.nut.min_write_interval_seconds)
         due = now - self._last_write_monotonic >= interval
         # A status change is never delayed: an outage must reach NUT clients at
-        # once, not up to poll_interval_seconds later.
+        # once, not up to an interval later.
         if not due and status == self._latest_status:
             return
 

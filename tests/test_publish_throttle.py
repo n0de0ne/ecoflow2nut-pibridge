@@ -22,9 +22,9 @@ def daemon(tmp_path, monkeypatch) -> Daemon:
             mac="DC:06:75:A8:3E:29",
             serial="E201ZE1APH560861",
             model="e2000",
-            poll_interval_seconds=5,
         )
     )
+    config.nut.min_write_interval_seconds = 5.0
     config.nut.dev_file_path = str(tmp_path / "ecoflow.dev")
     config.settings_file = str(tmp_path / "settings.json")
     return Daemon(config)
