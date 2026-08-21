@@ -115,3 +115,26 @@ def test_example_placeholders_are_rejected_with_a_useful_message(tmp_path, mac, 
 def test_a_real_looking_config_is_accepted(tmp_path):
     config = load_config(_config_with(tmp_path, "DC:06:75:A8:3E:29", "E201ZE1APH560861"))
     assert config.ecoflow.mac == "DC:06:75:A8:3E:29"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("serial", "\u2248E201ZE1APH560861"),  # a stray Option-key character
+        ("user_id", "196145717722655\u20ac393"),
+        ("serial", " E201ZE1APH560861"),  # leading whitespace
+    ],
+)
+def test_unusable_auth_values_are_rejected_at_load(tmp_path, field, value):
+    """These are hashed verbatim for authentication.
+
+    Left to reach the handshake, a non-ASCII character surfaces as a
+    UnicodeEncodeError from inside the ECDH exchange -- and it is invisible in
+    a terminal, so the config is the last place anyone looks.
+    """
+    values = {"mac": "DC:06:75:A8:3E:29", "serial": "E201ZE1APH560861", "user_id": "1"}
+    values[field] = value
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("ecoflow:\n" + "".join(f'  {k}: "{v}"\n' for k, v in values.items()))
+    with pytest.raises(ValueError, match="non-ASCII|whitespace"):
+        load_config(str(cfg))

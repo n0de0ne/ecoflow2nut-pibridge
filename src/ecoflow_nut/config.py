@@ -272,7 +272,8 @@ def _filter(cls: type, data: dict[str, Any]) -> dict[str, Any]:
 _PLACEHOLDERS = ("AA:BB:CC:DD:EE:FF", "REPLACE-WITH-FULL-SERIAL", "REPLACE-WITH-USER-ID")
 
 
-def _reject_placeholders(ecoflow: EcoflowConfig) -> None:
+def _validate_ecoflow(ecoflow: EcoflowConfig) -> None:
+    """Reject values that would fail later, far from their cause."""
     for key in ("mac", "serial", "user_id"):
         value = str(getattr(ecoflow, key) or "")
         if value.upper() in _PLACEHOLDERS or value.upper().startswith("REPLACE-WITH"):
@@ -286,6 +287,22 @@ def _reject_placeholders(ecoflow: EcoflowConfig) -> None:
                 f"config: 'ecoflow.{key}' still contains the example 'XXXX' "
                 f"placeholder ({value!r}); fill in your own device's value."
             )
+        # Authentication hashes user_id + serial as ASCII. A stray non-ASCII
+        # character -- easily typed by accident while editing, and invisible in
+        # a terminal -- otherwise blows up mid-handshake as a UnicodeEncodeError
+        # rather than pointing at the config.
+        if not value.isascii():
+            bad = "".join(sorted({c for c in value if not c.isascii()}))
+            raise ValueError(
+                f"config: 'ecoflow.{key}' contains non-ASCII character(s) {bad!r} "
+                f"({value!r}). Retype the value -- it is used verbatim for "
+                "authentication and must be plain ASCII."
+            )
+        if value != value.strip():
+            raise ValueError(
+                f"config: 'ecoflow.{key}' has leading or trailing whitespace "
+                f"({value!r}); it is used verbatim for authentication."
+            )
 
 
 def load_config(path: str | Path) -> Config:
@@ -296,7 +313,7 @@ def load_config(path: str | Path) -> Config:
     if not eco_raw or not eco_raw.get("mac"):
         raise ValueError("config: 'ecoflow.mac' is required")
     ecoflow = EcoflowConfig(**_filter(EcoflowConfig, eco_raw))
-    _reject_placeholders(ecoflow)
+    _validate_ecoflow(ecoflow)
 
     ble = BleConfig(**_filter(BleConfig, raw.get("ble", {})))
 
