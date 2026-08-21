@@ -124,3 +124,32 @@ def test_v4_constants_are_not_dataclass_fields():
     """HEADER_LEN/INNER_LEN must stay ClassVars, not per-instance values."""
     assert "HEADER_LEN" not in {f.name for f in fields(PacketV4)}
     assert "INNER_LEN" not in {f.name for f in fields(PacketV4)}
+
+
+def test_duplicate_notifications_are_dropped():
+    """BlueZ can deliver the same notification twice, ~1 ms apart.
+
+    Observed on a real E2000: every frame logged twice with identical bytes.
+    Merges are idempotent, but we answer recognised frames, and replying twice
+    doubles write traffic on an already chatty link.
+    """
+    client = _client_for_dedupe_test()
+    frame = _frame(2, b"\x01" * 8)
+    assert client._is_duplicate(frame) is False
+    assert client._is_duplicate(frame) is True
+
+
+def test_distinct_notifications_are_not_dropped():
+    client = _client_for_dedupe_test()
+    assert client._is_duplicate(_frame(2, b"\x01" * 8)) is False
+    assert client._is_duplicate(_frame(2, b"\x02" * 8)) is False
+
+
+def _client_for_dedupe_test():
+    from ecoflow_nut.ble_client import EcoFlowBLE
+    from ecoflow_nut.config import BleConfig, EcoflowConfig
+
+    return EcoFlowBLE(
+        EcoflowConfig(mac="AA:BB:CC:DD:EE:FF", serial="E201X", model="e2000"),
+        BleConfig(),
+    )

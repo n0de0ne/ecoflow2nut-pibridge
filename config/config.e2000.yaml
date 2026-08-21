@@ -1,0 +1,69 @@
+# EcoFlow E2000 (2048 Wh / 2400 W) NUT bridge configuration.
+#
+# The E2000 speaks the DELTA 2 Max protocol -- confirmed on hardware, not
+# inferred: it authenticates with V2 framing and its PD heartbeat is exactly
+# 137 bytes, PD_DELTA2_MAX's size. Only its serial prefix (E201) is new, which
+# is why integrations that whitelist serial prefixes call it "unsupported".
+#
+# Copy to config/config.yaml (gitignored) and fill in your own values.
+
+ecoflow:
+  mac: "AA:BB:CC:DD:EE:FF"          # from 'ecoflow-nut scan'
+  serial: "E201XXXXXXXXXXXX"        # FULL serial; auth hashes user_id + serial
+  user_id: ""                       # EcoFlow account id, required for encrypt_type 7
+  model: "e2000"                    # -> the delta2max driver (V2 framing)
+  poll_interval_seconds: 5
+  encrypt_type: "auto"              # the E2000 advertises type 7
+
+ble:
+  adapter: "hci0"
+  connect_timeout_seconds: 30
+  reconnect_backoff_max_seconds: 60
+  scan_timeout_seconds: 30
+
+nut:
+  device_name: "ecoflow"
+  dev_file_path: "/var/run/nut/ecoflow.dev"
+  battery_capacity_wh: 2048         # E2000 nameplate
+  realpower_nominal: 2400           # E2000 nameplate
+  battery_warning_percent: 35
+  battery_runtime_low_seconds: 300
+  battery_type: "LiFePO4"
+  battery_voltage_nominal: 51.2
+  input_transfer_low: 200
+  input_transfer_high: 250
+  ac_input_present_min_watts: 10
+  # The DELTA 2 generation measures mains voltage, so this is what decides
+  # OL vs OB -- it stays at nominal on a full battery with an idle load, where
+  # a watts-only rule would report a false outage.
+  ac_input_present_min_volts: 50
+  thresholds:
+    low_battery_percent: 25
+    critical_battery_percent: 10
+  static_values:
+    input_voltage: 230
+    input_frequency: 50
+    output_voltage: 230
+    output_frequency: 50
+    manufacturer: "EcoFlow"
+    model: "E2000"
+    serial: "E201XXXXXXXXXXXX"
+
+logging:
+  level: "INFO"
+  format: "json"
+
+control_socket_path: "/var/run/nut/ecoflow-nut.sock"
+settings_file: "/var/lib/ecoflow-nut/settings.json"
+
+# Cutting output is destructive; opt in deliberately. KEEP cut_usb false if the
+# Pi is powered from the station's USB port.
+auto_shutdown:
+  enabled: false
+  trigger_soc_percent: 10
+  recover_soc_percent: 15
+  grace_period_seconds: 300
+  cut_ac: true
+  cut_usb: false
+  cut_dc: false
+  restore_on_recovery: false

@@ -115,17 +115,22 @@ DRIVERS: dict[str, DeviceDriver] = {
 # after stripping everything but letters and digits, so "DELTA 2 Max",
 # "delta-2-max" and "delta2max" all land here identically.
 #
-# Deliberately absent: ``e2000`` / the ``EF-E2`` advertised-name prefix. That
-# prefix matches no known EcoFlow module, and a unit carrying it disconnects
-# rather than authenticating when addressed with V2 framing -- so guessing a
-# generation for it would map a real device onto the wrong protocol silently.
-# Determine it with ``ecoflow-nut probe`` and set ``model`` explicitly.
 ALIASES = {
     # DELTA 2 Max (2048 Wh / 2400 W).
     "d2max": "delta2max",
     "deltamax2": "delta2max",
     "r351": "delta2max",
     "r354": "delta2max",
+    # EcoFlow E2000 (EU/UK, 2048 Wh / 2400 W), serial prefix E201. CONFIRMED on
+    # hardware, not inferred from the matching spec sheet: a unit authenticates
+    # with V2 framing and streams the DELTA 2 Max subsystem set, including a PD
+    # heartbeat of exactly 137 bytes (PD_DELTA2_MAX's size). It advertises as
+    # EF-R35 + serial tail -- the DELTA 2 Max name prefix -- so only the serial
+    # prefix is new, which is precisely what prefix-whitelisting projects reject.
+    "e2000": "delta2max",
+    "e201": "delta2max",
+    "efe2000": "delta2max",
+    "efe2000eucbox": "delta2max",
     # DELTA 2 and the siblings sharing its PD layout.
     "d2": "delta2",
     "e980": "delta2",

@@ -183,26 +183,36 @@ Distinguishing the two failure modes matters:
 | Connects, stays up, but **silent** | Version plausible; check `ecoflow.serial` and `ecoflow.user_id` — auth hashes both |
 | Frames arrive but values are nonsense | Right version, wrong `xor_payload` or wrong layout |
 
-### Known unidentified: the EcoFlow E2000 (`E201` / `EF-E2`)
+### EcoFlow E2000 — CONFIRMED as the DELTA 2 Max protocol
 
-The **EcoFlow E2000** (2048 Wh, 2400 W; model `EFE2000-EU-CBOX`, an EU/UK
-release) carries serial prefix **`E201`** and advertises as **`EF-E2` + the last
-four serial characters** — e.g. serial `E201ZE1APH560861` advertises as
-`EF-E20861`.
+The **EcoFlow E2000** (2048 Wh, 2400 W; `EFE2000-EU-CBOX`, EU/UK) speaks the
+**DELTA 2 Max protocol**, verified against hardware:
 
-Its headline specs match the DELTA 2 Max exactly, which makes it tempting to
-assume the DELTA 2 protocol. **Do not.** `E201` appears in none of the fourteen
-prefixes the reference implementation knows (`EF-R33`, `EF-R35`, `EF-D3`,
-`EF-R3`, `EF-R2`, `EF-SHP3`, `EF-HW`, `EF-BK`, `EF-6`, `EF-AC`, `EF-F3`,
-`EF-GE`, `EF-WN2`, `EF-KT2`), and being a 2025 product it is more likely to be
-current-generation hardware in a familiar form factor.
+* it authenticates with **V2** framing (v3 and v4 do not);
+* it streams the DELTA 2 Max subsystem set — PD, EMS, BMS, INV, MPPT and the
+  extra-battery kit frame — at exactly the `(src, cmd_set, cmd_id)` triples in
+  the table above;
+* its **PD heartbeat is 137 bytes, exactly `PD_DELTA2_MAX`'s size** (the
+  DELTA 2's is 147), which is the single strongest identification signal.
 
-It is deliberately **not** aliased to a generation in `devices.py`: matching
-specs are not evidence of a matching protocol, and guessing would point a real
-device at the wrong one silently. Use `model: raw`, then `probe`, then `sniff`.
+Its serial prefix is **`E201`** (e.g. `E201ZE1APH560861`) but it advertises as
+**`EF-R35` + serial tail** — the DELTA 2 Max name prefix — and the full serial
+appears as ASCII in the advertisement's manufacturer data. So **only the serial
+prefix is new**: everything else is a DELTA 2 Max.
 
-Its NUT nameplate values, at least, are known: `battery_capacity_wh: 2048` and
-`realpower_nominal: 2400`.
+That is exactly why prefix-whitelisting integrations reject it as an
+"unsupported device" while a protocol they already implement works fine. It is
+the concrete case for selecting a driver by configuration, not by serial.
+
+`ecoflow.model: e2000` (or `E201`, or `delta2max`) selects the driver;
+`packet_version` needs no override since `delta2max` already defaults to V2.
+
+> **Observed firmware drift.** Several heartbeats are *longer* than the layouts
+> we know: EMS 55 B (layout 46), INV 72 B (67), BMS 192 B (69). `rawstruct`
+> decodes up to the boundary and ignores the rest, so appended fields are
+> harmless. It would only break if the firmware *inserted* a field rather than
+> appending — which would shift every later offset, and shows up immediately as
+> implausible values in `sniff`.
 
 ### V4 framing
 

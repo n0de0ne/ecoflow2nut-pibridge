@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import struct
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Final
@@ -381,6 +382,8 @@ class EcoFlowBLE:
         self._encrypt_type = 0
         self._authenticated = asyncio.Event()
         self._last_read_monotonic: float = 0.0
+        # Last raw notification, to drop BlueZ's duplicate deliveries.
+        self._last_notification: tuple[float, bytes] | None = None
 
     @property
     def driver(self) -> DeviceDriver:
@@ -635,14 +638,35 @@ class EcoFlowBLE:
 
     # -- notifications ------------------------------------------------------ #
     def _on_notify(self, _char: BleakGATTCharacteristic, value: bytearray) -> None:
-        log.debug("ble.notify", length=len(value), hex=bytes(value[:48]).hex())
+        data = bytes(value)
+        log.debug("ble.notify", length=len(data), hex=data[:48].hex())
+        if self._is_duplicate(data):
+            log.debug("ble.notify_duplicate", length=len(data))
+            return
         try:
-            payloads = self._assembler.reassemble(bytes(value))
+            payloads = self._assembler.reassemble(data)
         except Exception as exc:  # noqa: BLE001
             log.warning("ble.reassemble_error", error=str(exc))
             return
         for raw in payloads:
             self._handle_payload(raw)
+
+    def _is_duplicate(self, data: bytes) -> bool:
+        """True if this notification repeats the previous one within a few ms.
+
+        BlueZ can deliver the same notification twice (both through the
+        AcquireNotify pipe and as a PropertiesChanged signal). Telemetry merges
+        are idempotent so a duplicate is harmless there, but we answer every
+        recognised frame to keep the device streaming -- and replying twice
+        doubles the write traffic on a link that is already chatty.
+
+        Two genuinely distinct heartbeats never carry identical bytes this
+        close together: they arrive ~1 s apart and their counters differ.
+        """
+        now = time.monotonic()
+        previous = self._last_notification
+        self._last_notification = (now, data)
+        return previous is not None and previous[1] == data and now - previous[0] < 0.05
 
     def _handle_payload(self, raw: bytes) -> None:
         try:

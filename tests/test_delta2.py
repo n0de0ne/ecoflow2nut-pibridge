@@ -254,15 +254,10 @@ def test_unknown_model_names_the_supported_ones():
         devices.get_driver("powerstream")
 
 
-@pytest.mark.parametrize("model", ["e2000", "E2000", "EF-E2"])
-def test_unidentified_e2_prefix_is_rejected_rather_than_guessed(model):
-    """``EF-E2`` matches no known EcoFlow module and rejects V2 framing.
-
-    Silently aliasing it onto a generation would point a real device at the
-    wrong protocol; make the user pick one, after ``probe`` says which.
-    """
+def test_a_genuinely_unknown_model_still_raises():
+    """Superseded for EF-E2 (now identified), but the guard itself must remain."""
     with pytest.raises(ValueError):
-        devices.get_driver(model)
+        devices.get_driver("some-future-ecoflow")
 
 
 def test_packet_versions_match_the_protocol_generation():
@@ -351,3 +346,45 @@ def test_raw_driver_defaults_are_the_safe_ones_for_an_unknown_device():
     # ...and de-obfuscating a device that does not obfuscate would turn good
     # frames into noise, hiding the very thing a capture is meant to reveal.
     assert driver.xor_payload is False
+
+
+# --------------------------------------------------------------------------- #
+# EcoFlow E2000 (confirmed on hardware)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("model", ["e2000", "E2000", "E201", "EFE2000-EU-CBOX"])
+def test_e2000_resolves_to_the_delta2max_driver(model):
+    """Confirmed against hardware, not inferred from the spec sheet.
+
+    A unit with serial E201ZE1APH560861 authenticates with V2 framing and
+    streams the DELTA 2 Max subsystem set. Only its serial prefix is new, which
+    is exactly what a prefix-whitelisting integration rejects.
+    """
+    assert devices.get_driver(model).name == "delta2max"
+
+
+def test_e2000_observed_frames_are_all_understood():
+    """The (src, cmd_set, cmd_id) triples captured from a real E2000.
+
+    Payload lengths are the observed ones, several of which are *longer* than
+    the layouts we know -- newer firmware appending fields. Decoding must cope
+    rather than reject, which is why rawstruct stops at the boundary.
+    """
+    observed = [
+        (0x02, 0x20, 0x02, 137),  # PD -- exactly PD_DELTA2_MAX's size
+        (0x03, 0x20, 0x02, 55),  # EMS (layout is 46)
+        (0x03, 0x20, 0x32, 192),  # BMS (layout is 69)
+        (0x04, 0x20, 0x02, 72),  # INV (layout is 67)
+        (0x05, 0x20, 0x02, 92),  # MPPT
+    ]
+    driver = devices.get_driver("e2000")
+    for src, cmd_set, cmd_id, plen in observed:
+        packet = _frame(src, cmd_id, bytes(plen), cmd_set=cmd_set)
+        assert (
+            driver.handle_packet(DeviceState(), packet) is True
+        ), f"src=0x{src:02x} cmd_set=0x{cmd_set:02x} cmd_id=0x{cmd_id:02x} unhandled"
+
+
+def test_e2000_pd_heartbeat_length_matches_the_delta2max_layout():
+    """137 bytes is the single strongest identification signal we have."""
+    assert rawstruct.size_of(delta2.PD_DELTA2_MAX) == 137
+    assert rawstruct.size_of(delta2.PD_DELTA2) != 137
