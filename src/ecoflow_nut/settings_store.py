@@ -479,13 +479,26 @@ class SettingsStore:
             return
         if not isinstance(data, dict):
             return
+        before = current_values(config)
         # Apply per-key so one bad/stale key can't drop the whole file.
         for key, value in data.items():
             try:
                 apply_updates(config, {key: value})
             except ValueError as exc:
                 log.warning("settings.skip_key", key=key, error=str(exc))
+        # Name the keys that actually changed, not just how many were read.
+        # This file outlives the config it was saved from -- swap the device and
+        # its nameplate (capacity, nominal power) and auto-shutdown policy keep
+        # silently winning over the new YAML, which is invisible otherwise.
+        after = current_values(config)
+        overridden = sorted(k for k, v in after.items() if before.get(k) != v)
         log.info("settings.loaded", path=str(self._path), count=len(data))
+        if overridden:
+            log.warning(
+                "settings.overriding_config",
+                keys=overridden,
+                note="these come from the saved settings file, not config.yaml",
+            )
 
     def save(self, config: Config) -> None:
         """Atomically persist the full current editable state to JSON."""

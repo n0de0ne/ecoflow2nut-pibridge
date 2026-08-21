@@ -159,3 +159,50 @@ def test_load_skips_bad_keys(tmp_path: Path) -> None:
 
 def test_load_missing_file_is_noop(tmp_path: Path) -> None:
     SettingsStore(str(tmp_path / "nope.json")).load_into(_config())  # no raise
+
+
+def test_load_names_the_keys_that_override_config(tmp_path, capsys):
+    """A saved settings file outlives the config it was saved from.
+
+    Swap the device and its nameplate keeps silently winning over the new
+    config.yaml -- runtime computed against the wrong pack, load against the
+    wrong nominal -- with nothing in the log to say so.
+    """
+    import json
+
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "nut.battery_capacity_wh": 1024,  # a DELTA 3 pack
+                "nut.realpower_nominal": 1800,
+                "auto_shutdown.enabled": True,
+            }
+        )
+    )
+    config = _config()
+    config.nut.battery_capacity_wh = 2048  # the E2000's
+    config.nut.realpower_nominal = 2400
+
+    SettingsStore(str(path)).load_into(config)
+
+    assert config.nut.battery_capacity_wh == 1024, "the overlay still wins"
+    out = capsys.readouterr().out
+    assert "settings.overriding_config" in out, "an override must not be silent"
+    for key in ("nut.battery_capacity_wh", "nut.realpower_nominal"):
+        assert key in out, f"{key} overrode config.yaml but was not named"
+
+
+def test_load_is_quiet_when_nothing_differs(tmp_path, capsys):
+    """Only genuine overrides are worth a warning."""
+    import json
+
+    path = tmp_path / "settings.json"
+    config = _config()
+    path.write_text(
+        json.dumps({"nut.battery_capacity_wh": config.nut.battery_capacity_wh})
+    )
+
+    SettingsStore(str(path)).load_into(config)
+
+    assert "settings.overriding_config" not in capsys.readouterr().out
