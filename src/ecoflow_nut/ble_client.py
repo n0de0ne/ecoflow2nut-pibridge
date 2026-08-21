@@ -384,6 +384,8 @@ class EcoFlowBLE:
         self._last_read_monotonic: float = 0.0
         # Last raw notification, to drop BlueZ's duplicate deliveries.
         self._last_notification: tuple[float, bytes] | None = None
+        # Strong references to in-flight reply tasks (see _reply).
+        self._reply_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def driver(self) -> DeviceDriver:
@@ -701,10 +703,20 @@ class EcoFlowBLE:
             self._last_read_monotonic = asyncio.get_event_loop().time()
             if self._on_state is not None:
                 self._on_state(self.state)
-            # Reply so the device keeps streaming richer data.
-            asyncio.create_task(self._reply(packet))
+            # Reply so the device keeps streaming richer data. Keep a strong
+            # reference: a bare create_task may be garbage-collected while it
+            # is still running, and its exception then surfaces as an
+            # unretrieved-future warning instead of being handled below.
+            task = asyncio.create_task(self._reply(packet))
+            self._reply_tasks.add(task)
+            task.add_done_callback(self._reply_tasks.discard)
 
     async def _reply(self, packet: Packet) -> None:
+        # The link may have dropped between the frame arriving and this task
+        # being scheduled -- writing then raises BrokenPipeError from the D-Bus
+        # transport rather than a BLE-level error.
+        if not self.is_connected:
+            return
         reply = Packet(
             src=packet.dst,
             dst=packet.src,
@@ -718,8 +730,14 @@ class EcoFlowBLE:
         )
         try:
             await self._send_packet(reply)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - a reply is best-effort
             log.debug("ble.reply_failed", error=str(exc))
+
+    def _cancel_replies(self) -> None:
+        """Drop in-flight replies; their connection is gone."""
+        for task in list(self._reply_tasks):
+            task.cancel()
+        self._reply_tasks.clear()
 
     async def wait_authenticated(self, timeout: float) -> bool:
         try:
@@ -735,8 +753,10 @@ class EcoFlowBLE:
     def _on_disconnect(self, _client: BleakClient) -> None:
         log.warning("ble.disconnected")
         self._authenticated.clear()
+        self._cancel_replies()
 
     async def disconnect(self) -> None:
+        self._cancel_replies()
         if self._client is not None and self._client.is_connected:
             try:
                 await self._client.disconnect()
