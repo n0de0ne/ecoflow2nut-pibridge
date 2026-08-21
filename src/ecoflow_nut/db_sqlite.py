@@ -47,6 +47,9 @@ _COLUMN_TYPES = {
     "remain_charge_min": "INTEGER",
     "remain_discharge_min": "INTEGER",
     "error_code": "INTEGER",
+    # Appended deliberately: ALTER TABLE ADD COLUMN puts new columns last,
+    # so appending here keeps a migrated database and a fresh one identical.
+    "solar_input_watts": "REAL",
 }
 
 
@@ -89,8 +92,24 @@ class SqliteTelemetryStore:
             CREATE INDEX IF NOT EXISTS {self._table}_device_ts_idx
                 ON {self._table} (device, ts DESC);
             """)
+        self._add_missing_columns(conn)
         conn.commit()
         self._conn = conn
+
+    def _add_missing_columns(self, conn: sqlite3.Connection) -> None:
+        """Add columns introduced after this database was created.
+
+        CREATE TABLE IF NOT EXISTS leaves an existing table untouched, so a
+        database from an older version would silently keep failing every insert
+        once a metric is added.
+        """
+        existing = {
+            row["name"] for row in conn.execute(f"PRAGMA table_info({self._table})")
+        }
+        for name, affinity in _COLUMN_TYPES.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {self._table} ADD COLUMN {name} {affinity}")
+                log.info("db.column_added", column=name, backend="sqlite")
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -132,6 +151,7 @@ class SqliteTelemetryStore:
             state.remain_charge_minutes,
             state.remain_discharge_minutes,
             state.error_code,
+            state.solar_input_watts,
         )
         try:
             async with self._lock:

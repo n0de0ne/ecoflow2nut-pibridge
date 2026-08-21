@@ -37,6 +37,12 @@ class DeviceState:
     remain_charge_minutes: int | None = None
     remain_discharge_minutes: int | None = None
     error_code: int | None = None
+    # Live solar (PV) input in watts, summed across the device's PV channels.
+    # On the DELTA 2 generation the solar and car/DC inputs share one physical
+    # XT60 connector, driven by the MPPT charge controller -- so this is
+    # whatever that port is currently harvesting. ``None`` on models that do
+    # not report it.
+    solar_input_watts: float | None = None
     # Mains voltage measured at the AC input, when the device reports it. A far
     # more dependable "grid is up" signal than input watts, which fall to ~0 on
     # a full battery with no load. ``None`` on models that do not report it.

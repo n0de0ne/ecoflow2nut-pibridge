@@ -35,6 +35,7 @@ _METRIC_COLUMNS = (
     "usbc_output_watts",
     "input_watts",
     "output_watts",
+    "solar_input_watts",
     "runtime_seconds",
 )
 
@@ -95,11 +96,18 @@ class TelemetryStore:
                 ac_output_on       boolean,
                 remain_charge_min  integer,
                 remain_discharge_min integer,
-                error_code         integer
+                error_code         integer,
+                solar_input_watts  real
             );
             CREATE INDEX IF NOT EXISTS {self._table}_device_ts_idx
                 ON {self._table} (device, ts DESC);
             """)
+        # CREATE TABLE IF NOT EXISTS leaves an existing table untouched, so a
+        # database from an older version needs metrics added after the fact.
+        await self._pool.execute(
+            f"ALTER TABLE {self._table} "
+            "ADD COLUMN IF NOT EXISTS solar_input_watts real"
+        )
 
     async def record(
         self,
@@ -126,9 +134,11 @@ class TelemetryStore:
                     device, soc_percent, ac_input_watts, ac_output_watts,
                     usb_output_watts, usbc_output_watts, input_watts, output_watts,
                     runtime_seconds, status, ac_input_present, ac_output_on,
-                    remain_charge_min, remain_discharge_min, error_code
+                    remain_charge_min, remain_discharge_min, error_code,
+                    solar_input_watts
                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                    $15, $16
                 )
                 """,
                 device,
@@ -146,6 +156,7 @@ class TelemetryStore:
                 state.remain_charge_minutes,
                 state.remain_discharge_minutes,
                 state.error_code,
+                state.solar_input_watts,
             )
         except Exception as exc:  # noqa: BLE001 - logging must never crash the poll
             log.warning("db.record_failed", error=str(exc))

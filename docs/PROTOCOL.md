@@ -87,6 +87,29 @@ Every field the UPS view needs comes from the **EMS, BMS and INV** messages,
 whose layouts are shared across the whole generation. Only the PD and MPPT tails
 are model-specific, so an unlisted sibling still produces a working UPS.
 
+### Solar (PV) input
+
+The MPPT heartbeat carries the PV channels, summed into `solar_input_watts`:
+`in_watts` (PV1) plus `pv2_in_watts` (PV2, where the model has one). On this
+generation solar and car/DC charging share **one physical XT60 connector**
+driven by the MPPT charge controller, so these watts are whatever that port is
+harvesting; the firmware distinguishes the source itself via `xt60_chg_type` /
+`chg_type` and keeps separate lifetime counters (`sun_chg_power` vs
+`dc_chg_power` in the PD frame).
+
+Solar is deliberately kept **out** of `ac_input_watts` and out of `ups.status`.
+It is not a utility feed: folding it in would report "on line" through a
+daytime outage right up until dusk, exactly when clients most need the warning.
+The device's own all-sources total is `input_watts` (PD `watts_in_sum`), which
+does include PV.
+
+`None` means the model does not report PV at all, which the dashboard shows as
+a dash rather than a misleading `0`.
+
+Not published to NUT: there is no standard NUT variable for generation input
+(`input.voltage`/`input.frequency` describe the utility feed). It reaches the
+web dashboard, `/api/state`, and the telemetry history instead.
+
 ### SoC precedence
 
 A device reports SoC from up to three subsystems at different resolutions. They

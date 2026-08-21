@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -99,3 +100,36 @@ async def test_noop_before_connect() -> None:
 def test_unsafe_table_rejected(bad: str) -> None:
     with pytest.raises(ValueError):
         SqliteTelemetryStore(SqliteConfig(table=bad))
+
+
+def test_missing_columns_are_added_to_an_existing_database(tmp_path):
+    """CREATE TABLE IF NOT EXISTS leaves an old table alone.
+
+    Without a migration, a database created before a metric existed would fail
+    every insert from then on.
+    """
+    import sqlite3
+
+    path = tmp_path / "telemetry.db"
+    # A table as an older version would have created it: no solar column.
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE ecoflow_samples ("
+        "ts TEXT NOT NULL DEFAULT (datetime('now')), device TEXT NOT NULL, "
+        "soc_percent REAL)"
+    )
+    conn.commit()
+    conn.close()
+
+    store = SqliteTelemetryStore(SqliteConfig(enabled=True, path=str(path)))
+    asyncio.run(store.connect())
+    try:
+        columns = {
+            row[1]
+            for row in store._conn.execute("PRAGMA table_info(ecoflow_samples)")  # type: ignore[union-attr]
+        }
+        assert "solar_input_watts" in columns
+        # Every other later-added metric must be back too, not just the newest.
+        assert {"ac_input_watts", "status", "error_code"} <= columns
+    finally:
+        asyncio.run(store.close())

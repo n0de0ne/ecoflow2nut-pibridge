@@ -374,6 +374,8 @@ _INDEX_HTML = """<!doctype html>
         <div class="value"><span id="acIn">–</span><span class="unit">W</span></div></div>
       <div class="metric"><div class="label">AC output</div>
         <div class="value"><span id="acOut">–</span><span class="unit">W</span></div></div>
+      <div class="metric"><div class="label">Solar input</div>
+        <div class="value"><span id="solarIn">–</span><span class="unit">W</span></div></div>
       <div class="metric"><div class="label">USB / USB-C</div>
         <div class="value"><span id="usb">–</span><span class="unit">W</span></div></div>
       <div class="metric"><div class="label">Runtime est.</div>
@@ -539,6 +541,10 @@ async function refreshState() {
     $("#socFill").style.width = (s.soc_percent ?? 0) + "%";
     $("#acIn").textContent = Math.round(s.ac_input_watts ?? 0);
     $("#acOut").textContent = Math.round(s.ac_output_watts ?? 0);
+    // null means the model does not report PV at all, which is not the
+    // same as reporting zero -- show a dash rather than a misleading 0.
+    $("#solarIn").textContent =
+      s.solar_input_watts == null ? "–" : Math.round(s.solar_input_watts);
     const usb = (s.usb_output_watts ?? 0) + (s.usbc_output_watts ?? 0);
     $("#usb").textContent = Math.round(usb);
     $("#runtime").textContent = fmtRuntime(s.runtime_seconds);
@@ -651,12 +657,14 @@ const SERIES = [
   { key: "soc_percent", color: "#7ee2a8", max: 100, label: "SoC", unit: "%" },
   { key: "ac_output_watts", color: "#f2c969", max: null, label: "AC out", unit: "W" },
   { key: "ac_input_watts", color: "#a9c2ff", max: null, label: "AC in", unit: "W" },
+  { key: "solar_input_watts", color: "#ffb787", max: null, label: "Solar", unit: "W" },
 ];
 const PAD = 28;
 function xAt(i, n, W) { return PAD + (n < 2 ? 0 : (i / (n - 1)) * (W - 2 * PAD)); }
 function wattMax(points) {
   let m = 100;
-  for (const p of points) m = Math.max(m, p.ac_output_watts || 0, p.ac_input_watts || 0);
+  for (const p of points)
+    m = Math.max(m, p.ac_output_watts || 0, p.ac_input_watts || 0, p.solar_input_watts || 0);
   return m;
 }
 function drawChart() {

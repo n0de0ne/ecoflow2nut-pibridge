@@ -388,3 +388,51 @@ def test_e2000_pd_heartbeat_length_matches_the_delta2max_layout():
     """137 bytes is the single strongest identification signal we have."""
     assert rawstruct.size_of(delta2.PD_DELTA2_MAX) == 137
     assert rawstruct.size_of(delta2.PD_DELTA2) != 137
+
+
+# --------------------------------------------------------------------------- #
+# Solar (PV) input
+# --------------------------------------------------------------------------- #
+def test_mppt_heartbeat_sums_both_pv_channels():
+    payload = rawstruct.pack(delta2.MPPT_MR350, {"in_watts": 180, "pv2_in_watts": 120})
+    state = DeviceState()
+    assert delta2.DELTA2_MAX.handle_packet(state, _frame(0x05, 0x02, payload))
+    assert state.solar_input_watts == pytest.approx(300)
+
+
+def test_single_channel_model_reports_its_one_pv_input():
+    """The DELTA 2's MPPT layout has no second channel; the sum must still work."""
+    payload = rawstruct.pack(delta2.MPPT_MR330, {"in_watts": 95})
+    state = DeviceState()
+    assert delta2.DELTA2.handle_packet(state, _frame(0x05, 0x02, payload))
+    assert state.solar_input_watts == pytest.approx(95)
+
+
+def test_solar_never_counts_as_mains():
+    """Solar is not a utility feed.
+
+    Treating it as one would report "on line" through a daytime outage, right
+    up until dusk -- exactly when clients would need the warning most.
+    """
+    state = DeviceState()
+    solar = rawstruct.pack(delta2.MPPT_MR350, {"in_watts": 400})
+    outage = rawstruct.pack(delta2.INV_DELTA, {"ac_in_vol": 0, "output_watts": 150})
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x05, 0x02, solar))
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x04, 0x02, outage))
+
+    assert state.solar_input_watts == pytest.approx(400)
+    assert state.ac_input_present is False
+    assert state.ac_input_watts == pytest.approx(0)
+
+    from ecoflow_nut.config import NutConfig
+    from ecoflow_nut.nut_writer import derive_status
+
+    assert derive_status(state, NutConfig()) == "OB"
+
+
+def test_solar_is_none_on_a_model_that_never_reports_it():
+    """None means "not reported", which must stay distinguishable from zero."""
+    state = DeviceState()
+    payload = rawstruct.pack(delta2.EMS_HEARTBEAT, {"f32_lcd_show_soc": 50.0})
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x02, payload))
+    assert state.solar_input_watts is None

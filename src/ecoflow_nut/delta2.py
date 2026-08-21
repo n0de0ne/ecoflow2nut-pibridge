@@ -372,8 +372,7 @@ class Delta2Driver:
                 _merge_ems(state, rawstruct.unpack(EMS_HEARTBEAT, payload))
                 return True
             if src == SRC_MPPT:
-                # Decoded only so the frame counts as understood (and so the
-                # sniffer can show it); nothing here feeds the UPS view.
+                _merge_mppt(state, rawstruct.unpack(self.mppt_layout, payload))
                 return True
         # The inverter's cmd_set differs between models, so match on src alone.
         if src == SRC_INV and cmd_id == CMD_ID_HEARTBEAT:
@@ -456,6 +455,24 @@ def _merge_bms(state: DeviceState, bms: dict[str, Any]) -> None:
         state.update_soc(float(v), "bms")
     elif (v := bms.get("soc")) is not None:
         state.update_soc(float(v), "bms")
+
+
+def _merge_mppt(state: DeviceState, mppt: dict[str, Any]) -> None:
+    """Sum the PV channels into ``solar_input_watts``.
+
+    The MPPT is the solar charge controller, and it owns the XT60 connector
+    that doubles as the car/DC input -- so these watts are what that port is
+    harvesting right now, whatever is plugged into it. Models with a single
+    channel simply have no ``pv2_in_watts``.
+
+    Deliberately not folded into ``ac_input_watts`` or the UPS status: solar is
+    not a utility feed, and treating it as one would report "on line" during an
+    outage right up until dusk.
+    """
+    channels = [mppt.get("in_watts"), mppt.get("pv2_in_watts")]
+    present = [float(v) for v in channels if v is not None]
+    if present:
+        state.solar_input_watts = round(sum(present), 1)
 
 
 def _merge_inv(state: DeviceState, inv: dict[str, Any]) -> None:
