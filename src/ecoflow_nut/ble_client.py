@@ -390,6 +390,12 @@ class EcoFlowBLE:
         return self._driver
 
     @property
+    def packet_version(self) -> int:
+        """Frame version for control/auth: the config override, else the driver's."""
+        override = self._ecoflow.packet_version
+        return override if override is not None else self._driver.packet_version
+
+    @property
     def last_read_monotonic(self) -> float:
         return self._last_read_monotonic
 
@@ -562,7 +568,7 @@ class EcoFlowBLE:
 
     async def _request_auth_status(self) -> None:
         """Wake the auth state machine before sending credentials (cmd 0x89)."""
-        version = self._driver.packet_version
+        version = self.packet_version
         await self._send_packet(
             Packet(0x21, _AUTH_DST, 0x35, 0x89, b"", 0x01, 0x01, version)
         )
@@ -573,8 +579,9 @@ class EcoFlowBLE:
         ).digest()
         payload = "".join(f"{b:02X}" for b in digest).encode("ascii")
         # Credentials must go out in the frame version the model speaks: the
-        # DELTA 2 generation is V2, the DELTA 3 generation V3.
-        version = self._driver.packet_version
+        # DELTA 2 generation is V2, the DELTA 3 generation V3. Getting this
+        # wrong makes the device drop the link instead of replying.
+        version = self.packet_version
         packet = Packet(0x21, _AUTH_DST, 0x35, 0x86, payload, 0x01, 0x01, version)
         await self._send_packet(packet)
 

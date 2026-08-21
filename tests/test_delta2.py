@@ -238,7 +238,6 @@ def test_output_packet_rejects_unknown_kind():
         ("delta2max", "delta2max"),
         ("DELTA 2 Max", "delta2max"),
         ("delta-2-max", "delta2max"),
-        ("E2000", "delta2max"),
         ("R351", "delta2max"),
         ("delta2", "delta2"),
         ("DELTA 2", "delta2"),
@@ -253,6 +252,17 @@ def test_model_aliases_resolve(model, expected):
 def test_unknown_model_names_the_supported_ones():
     with pytest.raises(ValueError, match="delta2max"):
         devices.get_driver("powerstream")
+
+
+@pytest.mark.parametrize("model", ["e2000", "E2000", "EF-E2"])
+def test_unidentified_e2_prefix_is_rejected_rather_than_guessed(model):
+    """``EF-E2`` matches no known EcoFlow module and rejects V2 framing.
+
+    Silently aliasing it onto a generation would point a real device at the
+    wrong protocol; make the user pick one, after ``probe`` says which.
+    """
+    with pytest.raises(ValueError):
+        devices.get_driver(model)
 
 
 def test_packet_versions_match_the_protocol_generation():

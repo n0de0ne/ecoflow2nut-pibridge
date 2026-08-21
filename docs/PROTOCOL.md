@@ -163,6 +163,40 @@ these has **not** been confirmed on a real DELTA 3.
 
 ---
 
+## When a device disconnects during authentication
+
+Sending the wrong frame version does **not** produce a timeout: the device
+accepts the BLE connection, receives an auth packet it cannot parse, and
+**drops the link**. In Home Assistant's ef_ble that surfaces as
+`Disconnected from device (... _async_ble_device_disconnected ...)` shortly
+after "running authentication procedure"; raising the connection timeout
+cannot help, because nothing is being waited for.
+
+`ecoflow-nut probe` sweeps the candidate versions and reports which one keeps
+the link up and yields frames; put the winner in `ecoflow.packet_version`.
+
+Distinguishing the two failure modes matters:
+
+| Symptom | Meaning |
+|---------|---------|
+| Connects, then **disconnected** by the device | Wrong frame version for this model |
+| Connects, stays up, but **silent** | Version plausible; check `ecoflow.serial` and `ecoflow.user_id` — auth hashes both |
+| Frames arrive but values are nonsense | Right version, wrong `xor_payload` or wrong layout |
+
+### Known unidentified: the `EF-E2` prefix
+
+A unit advertising `EF-E2…` matches **no** module in the reference
+implementation (whose prefixes are `EF-R33`, `EF-R35`, `EF-D3`, `EF-R3`,
+`EF-R2`, `EF-SHP3`, `EF-HW`, `EF-BK`, `EF-6`, `EF-AC`, `EF-F3`, `EF-GE`,
+`EF-WN2`, `EF-KT2`) and rejects V2 framing by disconnecting. It is deliberately
+**not** aliased to a generation in `devices.py`: guessing would point a real
+device at the wrong protocol silently. Identify it with `probe`, then `sniff`.
+
+Note EcoFlow also has a **V4** frame format (a different wire layout with two
+XOR obfuscation layers over the inner command header) which this bridge does
+not implement. If no version this bridge offers keeps the link up, V4 is the
+likely explanation.
+
 ## Verifying a device against this implementation
 
 `ecoflow-nut sniff` connects like the daemon does and reports **every** frame

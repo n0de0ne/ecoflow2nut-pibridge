@@ -78,12 +78,16 @@ DRIVERS: dict[str, DeviceDriver] = {
 # EcoFlow prints on the unit, mapped onto a canonical name. Keys are compared
 # after stripping everything but letters and digits, so "DELTA 2 Max",
 # "delta-2-max" and "delta2max" all land here identically.
+#
+# Deliberately absent: ``e2000`` / the ``EF-E2`` advertised-name prefix. That
+# prefix matches no known EcoFlow module, and a unit carrying it disconnects
+# rather than authenticating when addressed with V2 framing -- so guessing a
+# generation for it would map a real device onto the wrong protocol silently.
+# Determine it with ``ecoflow-nut probe`` and set ``model`` explicitly.
 ALIASES = {
-    # DELTA 2 Max (2048 Wh / 2400 W), sold under several model codes.
+    # DELTA 2 Max (2048 Wh / 2400 W).
     "d2max": "delta2max",
     "deltamax2": "delta2max",
-    "e2000": "delta2max",
-    "efd2000": "delta2max",
     "r351": "delta2max",
     "r354": "delta2max",
     # DELTA 2 and the siblings sharing its PD layout.

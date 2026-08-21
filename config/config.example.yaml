@@ -28,6 +28,13 @@ ecoflow:
   encrypt_type: "auto"
   user_id: ""   # required for encrypt_type 7; obtain once via the EcoFlow API
 
+  # Frame version for control + authentication. Leave unset to use the model
+  # default (2 for the DELTA 2 generation, 3 for the DELTA 3). Send the wrong
+  # one and the device DROPS THE CONNECTION during authentication instead of
+  # replying -- "connected, then disconnected" is that signature, and a longer
+  # timeout will not help. Run 'ecoflow-nut probe' to find the right value.
+  # packet_version: 3
+
 ble:
   adapter: "hci0"
   connect_timeout_seconds: 30

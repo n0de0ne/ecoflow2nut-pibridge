@@ -26,6 +26,11 @@ class EcoflowConfig:
     # handshake. encrypt_type "auto" reads it from the BLE advertisement.
     encrypt_type: str | int = "auto"
     user_id: str = ""
+    # Override the frame version used for control and authentication. None uses
+    # the driver's default (2 for the DELTA 2 generation, 3 for the DELTA 3).
+    # Sending the wrong version makes a device drop the connection during
+    # authentication rather than reply, so ``ecoflow-nut probe`` sweeps this.
+    packet_version: int | None = None
 
 
 @dataclass(slots=True)

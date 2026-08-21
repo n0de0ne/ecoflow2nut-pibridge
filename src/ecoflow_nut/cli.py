@@ -154,6 +154,80 @@ def scan(ctx: click.Context, timeout: int, show_all: bool) -> None:
 
 
 @cli.command()
+@click.option("--seconds", default=20, show_default=True, help="Listen time per attempt.")
+@click.pass_context
+def probe(ctx: click.Context, seconds: int) -> None:
+    """Find which frame version a device authenticates with.
+
+    Sending the wrong version makes a device **drop the connection** during
+    authentication rather than answer, so "connected, then disconnected" is the
+    signature of a wrong guess -- not something a longer timeout can fix.
+
+    This connects once per candidate version and reports which one keeps the
+    link up and produces telemetry. Put the winner in ``ecoflow.packet_version``.
+    """
+    config = load_config(ctx.obj["config_path"])
+    configure_logging(config.logging.level, config.logging.format)
+    asyncio.run(_probe(config, seconds))
+
+
+# Candidate frame versions, most likely first: every modern EcoFlow device uses
+# V3; only the DELTA 2 generation, River 2 and Wave 2 still speak V2.
+PROBE_VERSIONS = (3, 2)
+
+
+async def _probe(config: Config, seconds: int) -> None:
+    results: list[tuple[int, str, int]] = []
+    for version in PROBE_VERSIONS:
+        config.ecoflow.packet_version = version
+        click.echo(f"\n=== trying packet_version {version} ===")
+        frames: list[object] = []
+        client = EcoFlowBLE(config.ecoflow, config.ble, on_packet=frames.append)
+        try:
+            await client.connect()
+        except Exception as exc:  # noqa: BLE001 - report and try the next version
+            click.echo(f"  connect failed: {exc}")
+            results.append((version, f"connect failed: {exc}", 0))
+            continue
+        try:
+            authed = await client.wait_authenticated(timeout=seconds)
+            # Keep listening briefly: a device that accepts the auth starts
+            # streaming telemetry, one that rejects it drops the link instead.
+            await asyncio.sleep(min(seconds, 10))
+            connected = client.is_connected
+            if authed and connected:
+                verdict = "AUTHENTICATED, link stable"
+            elif authed and not connected:
+                verdict = "replied then disconnected (version likely wrong)"
+            elif not connected:
+                verdict = "disconnected by device (version likely wrong)"
+            else:
+                verdict = "connected but silent (check serial / user_id)"
+            click.echo(f"  {verdict} -- {len(frames)} frame(s)")
+            results.append((version, verdict, len(frames)))
+        finally:
+            await client.disconnect()
+
+    click.echo("\n--- summary ---")
+    for version, verdict, count in results:
+        click.echo(f"  packet_version {version}: {verdict} ({count} frames)")
+    winners = [v for v, _, count in results if count > 0]
+    if winners:
+        click.echo(
+            f"\nSet 'ecoflow.packet_version: {winners[0]}' in config.yaml, then run "
+            "'ecoflow-nut sniff' to identify the telemetry layout."
+        )
+    else:
+        click.echo(
+            "\nNo version produced frames. If every attempt was disconnected by the "
+            "device, it may use a frame format this bridge does not implement yet "
+            "(EcoFlow also has a V4 format) -- capture the raw traffic and open an "
+            "issue. If attempts were silent instead, re-check ecoflow.serial and "
+            "ecoflow.user_id: authentication hashes both."
+        )
+
+
+@cli.command()
 @click.option("--seconds", default=60, show_default=True, help="Capture duration.")
 @click.option(
     "--out",
