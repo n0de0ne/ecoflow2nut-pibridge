@@ -751,8 +751,28 @@ class Daemon:
             if stale > WATCHDOG_TIMEOUT_SECONDS:
                 log.critical("daemon.watchdog_timeout", stale_seconds=round(stale))
                 self._stop.set()
+                await self._force_disconnect()
                 # Hard-exit so the supervisor restarts us.
                 sys.exit(70)
+
+    async def _force_disconnect(self) -> None:
+        """Tear the BLE link down before the watchdog kills the process.
+
+        Exiting without this leaves BlueZ holding the connection. The device --
+        which accepts one client at a time -- then believes it still has one, so
+        it stops advertising and becomes invisible to every scanner on the host,
+        not just to us. Nothing can reach it again until it is power-cycled,
+        which is a miserable failure mode for a watchdog whose whole job is to
+        recover automatically.
+        """
+        client = self._active_client
+        if client is None:
+            return
+        try:
+            await asyncio.wait_for(client.disconnect(), timeout=5)
+            log.info("daemon.watchdog_disconnected")
+        except Exception as exc:  # noqa: BLE001 - we are exiting regardless
+            log.warning("daemon.watchdog_disconnect_failed", error=str(exc))
 
     async def _sleep_or_stop(self, seconds: float) -> None:
         try:

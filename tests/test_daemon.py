@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from pathlib import Path
 
 import pytest
@@ -203,3 +204,72 @@ async def test_manual_override_cancels_the_wait(tmp_path: Path) -> None:
     assert task.cancelled() or task.done()
     assert eve.commanded == [False]
     assert daemon._eve_state is False
+
+
+async def test_watchdog_disconnects_before_exiting(tmp_path, monkeypatch):
+    """A hard exit strands the BLE link, and the device goes off-air.
+
+    BlueZ keeps a connection the process never closed; the device -- one client
+    at a time -- believes it still has one, stops advertising, and no scanner on
+    the host can see it again until it is power-cycled. That defeats the whole
+    point of a watchdog meant to recover unattended.
+    """
+    from ecoflow_nut.config import Config, EcoflowConfig
+    from ecoflow_nut.main import Daemon
+
+    config = Config(
+        ecoflow=EcoflowConfig(
+            mac="DC:06:75:A8:3E:29", serial="E201ZE1APH560861", model="e2000"
+        )
+    )
+    config.nut.dev_file_path = str(tmp_path / "ecoflow.dev")
+    config.settings_file = str(tmp_path / "settings.json")
+    daemon = Daemon(config)
+
+    disconnected: list[bool] = []
+
+    class _Client:
+        async def disconnect(self) -> None:
+            disconnected.append(True)
+
+    daemon._active_client = _Client()  # type: ignore[assignment]
+    # Make the link look stale enough to trip the watchdog immediately.
+    daemon._last_write_monotonic = time.monotonic() - 10_000
+    monkeypatch.setattr("ecoflow_nut.main.asyncio.sleep", _no_sleep)
+
+    with pytest.raises(SystemExit) as exc:
+        await daemon._watchdog()
+
+    assert exc.value.code == 70, "still exits so the supervisor restarts us"
+    assert disconnected == [True], "the BLE link must be released first"
+
+
+async def test_watchdog_still_exits_if_the_disconnect_fails(tmp_path, monkeypatch):
+    """A wedged link must not stop the restart -- exiting is the recovery."""
+    from ecoflow_nut.config import Config, EcoflowConfig
+    from ecoflow_nut.main import Daemon
+
+    config = Config(
+        ecoflow=EcoflowConfig(
+            mac="DC:06:75:A8:3E:29", serial="E201ZE1APH560861", model="e2000"
+        )
+    )
+    config.nut.dev_file_path = str(tmp_path / "ecoflow.dev")
+    config.settings_file = str(tmp_path / "settings.json")
+    daemon = Daemon(config)
+
+    class _StuckClient:
+        async def disconnect(self) -> None:
+            raise OSError("transport already gone")
+
+    daemon._active_client = _StuckClient()  # type: ignore[assignment]
+    daemon._last_write_monotonic = time.monotonic() - 10_000
+    monkeypatch.setattr("ecoflow_nut.main.asyncio.sleep", _no_sleep)
+
+    with pytest.raises(SystemExit) as exc:
+        await daemon._watchdog()
+    assert exc.value.code == 70
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None
