@@ -109,6 +109,25 @@ class AutoShutdownConfig:
     # single load (e.g. an Unraid server) be shed independently of the DELTA 3's
     # all-or-nothing AC bank, keeping other AC sockets (router/fibre) powered.
     cut_eve: bool = False
+    # Before cutting the Eve outlet, connect and read its OWN power draw, and
+    # only cut once it reports at/below this many watts -- i.e. the load really
+    # has finished shutting down. The low-load trigger infers that from the
+    # DELTA 3's *total* AC draw, which is a proxy that can fire while the load is
+    # still writing to disk; this confirms it at the outlet itself.
+    #
+    # None disables the check (cut immediately, the historical behaviour). The
+    # outlet must expose Eve's instantaneous-watts characteristic -- verify with
+    # 'ecoflow-nut eve status --all' before enabling.
+    eve_confirm_idle_watts: float | None = None
+    eve_confirm_poll_seconds: float = 15.0
+    # Consecutive idle readings required, so a momentary dip mid-shutdown does
+    # not look like "finished".
+    eve_confirm_samples: int = 2
+    # Give up waiting and cut anyway after this long. None waits indefinitely:
+    # safest for the load, but if the outlet is unreachable nothing is ever shed
+    # and the battery drains to zero (at which point the load loses power
+    # uncleanly regardless). Set a value to bound that.
+    eve_confirm_timeout_seconds: int | None = None
     restore_on_recovery: bool = False
 
 
@@ -188,15 +207,17 @@ class PostgresConfig:
     """Optional Postgres telemetry logging.
 
     Disabled by default. When enabled with a ``dsn`` (or the ECOFLOW_PG_DSN env
-    var), the daemon records one sample row per poll and the web UI's history
+    var), the daemon records one sample row per telemetry frame received from the
+    device -- subject to ``min_interval_seconds`` -- and the web UI's history
     charts read from it. The bridge runs fine with no database.
     """
 
     enabled: bool = False
     dsn: str = ""  # e.g. postgresql://user:pass@host:5432/ecoflow
     table: str = "ecoflow_samples"
-    # Minimum seconds between persisted samples (decouples DB write rate from the
-    # BLE poll interval). 0 logs every complete frame.
+    # Minimum seconds between persisted samples. The device pushes telemetry at
+    # its own cadence, so this is what actually sets stored sample density (and
+    # therefore chart detail). 0 logs every complete frame.
     min_interval_seconds: int = 0
     retention_days: int = 0  # 0 disables automatic pruning of old rows
 
@@ -206,11 +227,12 @@ class SqliteConfig:
     """Optional local SQLite telemetry logging.
 
     Disabled by default. A 100%-local, zero-extra-dependency store (Python stdlib
-    ``sqlite3``): the daemon records one sample row per poll into a single file on
-    the bridge host and the web UI's history charts read from it. Ideal when the
-    bridge should be self-contained with no separate database server. The bridge
-    runs fine if the file can't be written. If both ``postgres`` and ``sqlite``
-    are enabled, Postgres takes precedence.
+    ``sqlite3``): the daemon records one sample row per telemetry frame received
+    from the device -- subject to ``min_interval_seconds`` -- into a single file
+    on the bridge host, and the web UI's history charts read from it. Ideal when
+    the bridge should be self-contained with no separate database server. The
+    bridge runs fine if the file can't be written. If both ``postgres`` and
+    ``sqlite`` are enabled, Postgres takes precedence.
     """
 
     enabled: bool = False

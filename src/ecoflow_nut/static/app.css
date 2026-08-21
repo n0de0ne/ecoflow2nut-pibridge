@@ -1,0 +1,587 @@
+/* ---------------------------------------------------------------------- *
+ * Design tokens. Dark is the default; light follows the system unless the
+ * header toggle pins a choice via data-theme on <html>.
+ * ---------------------------------------------------------------------- */
+:root {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --surface: #151823;
+  --surface-2: #1b1f2b;
+  --border: #222631;
+  --text: #e6e6e6;
+  --text-dim: #8a93a6;
+  --accent: #a9c2ff;
+  --ok: #7ee2a8;
+  --ok-bg: #16432a;
+  --warn: #f2c969;
+  --warn-bg: #5a4216;
+  --crit: #f29494;
+  --crit-bg: #5a1d1d;
+  --chart-grid: #222631;
+  --chart-crosshair: #3a4356;
+  --c-soc: #7ee2a8;
+  --c-acout: #f2c969;
+  --c-acin: #a9c2ff;
+  --c-solar: #ffb787;
+  --c-usb: #d3a4f0;
+  --c-in: #6fd3d0;
+  --c-out: #f0a06f;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .3);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, .45);
+  --radius: 8px;
+  --radius-lg: 14px;
+  --rail: 216px;
+  --tabbar: 60px;
+  --dur: 160ms;
+  --ease: cubic-bezier(.2, .7, .3, 1);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #f5f6f8;
+    --surface: #ffffff;
+    --surface-2: #eef0f4;
+    --border: #dfe3ea;
+    --text: #1a1d24;
+    --text-dim: #656d7e;
+    --accent: #2f5bd0;
+    --ok: #1a7f4b;
+    --ok-bg: #d6f2e2;
+    --warn: #8a6100;
+    --warn-bg: #fdefcd;
+    --crit: #b3261e;
+    --crit-bg: #fadad7;
+    --chart-grid: #e4e8ef;
+    --chart-crosshair: #9aa3b4;
+    --c-soc: #1a7f4b;
+    --c-acout: #b07d00;
+    --c-acin: #2f5bd0;
+  --c-solar: #b5560a;
+    --c-usb: #7b3fa8;
+    --c-in: #0f7f7c;
+    --c-out: #c25a1c;
+    --shadow-1: 0 1px 2px rgba(16, 24, 40, .06);
+    --shadow-2: 0 8px 24px rgba(16, 24, 40, .12);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --border: #dfe3ea;
+  --text: #1a1d24;
+  --text-dim: #656d7e;
+  --accent: #2f5bd0;
+  --ok: #1a7f4b;
+  --ok-bg: #d6f2e2;
+  --warn: #8a6100;
+  --warn-bg: #fdefcd;
+  --crit: #b3261e;
+  --crit-bg: #fadad7;
+  --chart-grid: #e4e8ef;
+  --chart-crosshair: #9aa3b4;
+  --c-soc: #1a7f4b;
+  --c-acout: #b07d00;
+  --c-acin: #2f5bd0;
+  --c-solar: #b5560a;
+  --c-usb: #7b3fa8;
+  --c-in: #0f7f7c;
+  --c-out: #c25a1c;
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, .06);
+  --shadow-2: 0 8px 24px rgba(16, 24, 40, .12);
+}
+
+/* ---------------------------------------------------------------------- *
+ * Base
+ * ---------------------------------------------------------------------- */
+* { box-sizing: border-box; }
+
+/* [hidden] must beat the layout display values set below. */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overscroll-behavior-y: contain;
+  -webkit-tap-highlight-color: transparent;
+  display: grid;
+  grid-template-columns: var(--rail) 1fr;
+  grid-template-rows: auto 1fr;
+  grid-template-areas: "bar bar" "nav main";
+}
+
+/* Digits stop jittering as values tick. */
+.value, .metric .value, #freshnessText { font-variant-numeric: tabular-nums; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ---------------------------------------------------------------------- *
+ * App bar
+ * ---------------------------------------------------------------------- */
+.appbar {
+  grid-area: bar;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .75rem 1rem;
+  padding-top: calc(.75rem + env(safe-area-inset-top));
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.appbar h1 {
+  font-size: 1rem; margin: 0; font-weight: 650;
+  letter-spacing: -.01em; white-space: nowrap;
+}
+
+.status-pill {
+  margin-left: auto;
+  padding: .2rem .6rem;
+  border-radius: 999px;
+  font-size: .78rem;
+  font-weight: 650;
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+.status-OL { background: var(--ok-bg); color: var(--ok); }
+.status-OB { background: var(--warn-bg); color: var(--warn); }
+.status-LB { background: var(--crit-bg); color: var(--crit); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .25rem .6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: .76rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.chip .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-dim); flex: 0 0 auto;
+}
+.chip.ok .dot { background: var(--ok); }
+.chip.warn .dot { background: var(--warn); }
+.chip.bad .dot { background: var(--crit); }
+.chip.warn, .chip.bad { color: var(--text); }
+
+.icon-btn {
+  border: 0; background: transparent; color: var(--text-dim);
+  font-size: 1rem; cursor: pointer; padding: .3rem .4rem; border-radius: var(--radius);
+}
+.icon-btn:hover { background: var(--surface-2); color: var(--text); }
+
+/* ---------------------------------------------------------------------- *
+ * Navigation: side rail on desktop, bottom tab bar on mobile
+ * ---------------------------------------------------------------------- */
+.nav {
+  grid-area: nav;
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+  padding: .75rem .5rem;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+.nav a {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  padding: .6rem .75rem;
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  text-decoration: none;
+  font-weight: 550;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.nav a:hover { background: var(--surface-2); color: var(--text); }
+.nav a.active { background: var(--surface-2); color: var(--accent); }
+.nav-icon { font-size: 1rem; width: 1.2rem; text-align: center; }
+
+main {
+  grid-area: main;
+  padding: 1.1rem;
+  display: grid;
+  gap: 1.1rem;
+  align-content: start;
+  max-width: 1100px;
+  width: 100%;
+}
+
+[data-view] { display: grid; gap: 1.1rem; align-content: start; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .view-enter { animation: viewIn var(--dur) var(--ease); }
+  @keyframes viewIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
+@media (max-width: 899px) {
+  body { grid-template-columns: 1fr; grid-template-areas: "bar" "main"; }
+  .appbar { gap: .45rem; padding-inline: .75rem; }
+  .appbar h1 { font-size: .9rem; }
+  .chip { font-size: .7rem; padding: .22rem .5rem; }
+  .nav {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 20;
+    flex-direction: row;
+    justify-content: space-around;
+    border-right: 0;
+    border-top: 1px solid var(--border);
+    padding: .3rem .3rem calc(.3rem + env(safe-area-inset-bottom));
+  }
+  .nav a { flex-direction: column; gap: .15rem; font-size: .68rem; padding: .4rem .5rem; }
+  .nav-icon { font-size: 1.15rem; }
+  main { padding-bottom: calc(var(--tabbar) + 1.5rem); }
+}
+
+/* ---------------------------------------------------------------------- *
+ * Cards & metrics
+ * ---------------------------------------------------------------------- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.1rem;
+  box-shadow: var(--shadow-1);
+}
+
+h2 {
+  font-size: .78rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-dim);
+  margin: 0 0 .8rem;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+}
+.metric .label {
+  font-size: .7rem; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-dim);
+}
+.metric .value { font-size: 1.6rem; font-weight: 650; margin-top: .15rem; }
+.metric .value.sm, .metric.sm .value { font-size: 1.15rem; }
+.metric .unit { font-size: .82rem; color: var(--text-dim); margin-left: .2rem; font-weight: 400; }
+
+.soc-bar {
+  height: 8px; border-radius: 999px; background: var(--surface-2);
+  margin-top: .5rem; overflow: hidden;
+}
+.soc-fill {
+  height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--ok) 55%, transparent), var(--ok));
+  transition: width .4s var(--ease);
+}
+
+/* First paint only: shimmer where the numbers will land, so the page never
+   shows a row of em-dashes. Refreshes update in place and must not flash. */
+.booting .metric .value > span,
+.booting .pstat,
+.booting #asState {
+  color: transparent;
+  background: linear-gradient(90deg, var(--surface-2), var(--border), var(--surface-2));
+  background-size: 200% 100%;
+  border-radius: 5px;
+  /* Sized to the eventual value, not to the "–" placeholder glyph, so the
+     skeleton reads as a bar rather than a sliver. */
+  display: inline-block;
+  min-width: 3.5ch;
+}
+.booting .pstat { min-width: 6ch; }
+.booting #asState { min-width: 9ch; }
+@media (prefers-reduced-motion: no-preference) {
+  .booting .metric .value > span,
+  .booting .pstat,
+  .booting #asState { animation: shimmer 1.3s linear infinite; }
+  @keyframes shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+  }
+}
+.booting .metric .value .unit { color: transparent; background: none; }
+.booting .led { visibility: hidden; }
+
+.muted { color: var(--text-dim); font-size: .85rem; margin: .5rem 0 0; }
+.hint { font-size: .78rem; }
+.link { color: var(--accent); text-decoration: none; font-size: .85rem; }
+.link:hover { text-decoration: underline; }
+.error { color: var(--crit); font-size: .82rem; }
+
+/* ---------------------------------------------------------------------- *
+ * Controls
+ * ---------------------------------------------------------------------- */
+/* Auto-fit columns rather than flex:1, so a control never shrinks below the
+   width of its own buttons and clips them. */
+.controls {
+  display: grid;
+  gap: .7rem;
+  grid-template-columns: repeat(auto-fit, minmax(272px, 1fr));
+}
+.ctl {
+  display: flex; align-items: center; gap: .55rem;
+  padding: .6rem .8rem;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+}
+.ctl .name { font-weight: 600; flex: 1 1 auto; min-width: 0; }
+.ctl .name .muted { font-size: .76rem; margin: 0; display: block; }
+.ctl-actions { display: flex; gap: .35rem; flex: 0 0 auto; margin-left: auto; }
+
+.led {
+  display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--text-dim); margin-right: .4rem; flex: 0 0 auto;
+}
+.led.on { background: var(--ok); box-shadow: 0 0 7px color-mix(in srgb, var(--ok) 60%, transparent); }
+.led.off { background: var(--text-dim); }
+.led.warn { background: var(--warn); animation: pulse 1.2s infinite; }
+.led.crit { background: var(--crit); animation: pulse 1s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .led { animation: none !important; } }
+
+.pstat {
+  display: inline-flex; align-items: center; flex: 0 0 auto;
+  font-size: .78rem; color: var(--text-dim); white-space: nowrap;
+}
+.pstat.on { color: var(--ok); }
+.as-badge { display: inline-flex; align-items: center; font-weight: 600; }
+
+button {
+  font: inherit; font-weight: 600;
+  border: 0; border-radius: var(--radius);
+  padding: .42rem .8rem;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: filter var(--dur) var(--ease);
+}
+button:hover:not(:disabled) { filter: brightness(1.15); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.on { background: var(--ok-bg); color: var(--ok); }
+button.off { background: var(--crit-bg); color: var(--crit); }
+button.primary { background: var(--accent); color: var(--bg); }
+button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+
+/* ---------------------------------------------------------------------- *
+ * Chart
+ * ---------------------------------------------------------------------- */
+.toolbar {
+  display: flex; align-items: center; gap: .6rem;
+  flex-wrap: wrap; margin-bottom: .8rem;
+}
+.toolbar-right { margin-left: auto; display: flex; gap: .4rem; }
+.range { display: flex; gap: .3rem; flex-wrap: wrap; }
+.range button { background: var(--surface-2); font-size: .8rem; padding: .3rem .7rem; }
+.range button.active { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
+#chartLive.active { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+
+.chart-wrap { position: relative; }
+#chart {
+  width: 100%;
+  height: 260px;
+  display: block;
+  cursor: crosshair;
+  /* Without this the browser pans/zooms the page instead of the chart. */
+  touch-action: none;
+}
+@media (min-width: 900px) { #chart { height: 320px; } }
+
+.chart-tip {
+  position: absolute; top: 6px; pointer-events: none; display: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .5rem .6rem;
+  font-size: .78rem;
+  white-space: nowrap;
+  box-shadow: var(--shadow-2);
+  z-index: 5;
+}
+.chart-tip-time { color: var(--text-dim); margin-bottom: .3rem; }
+.chart-tip-row { display: flex; align-items: center; gap: .35rem; }
+.chart-tip-row b { margin-left: auto; padding-left: .8rem; }
+.chart-tip i {
+  width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto;
+}
+
+.legend { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .7rem; }
+.legend-chip {
+  display: inline-flex; align-items: center; gap: .35rem;
+  background: transparent; border: 1px solid var(--border);
+  border-radius: 999px; padding: .2rem .6rem;
+  font-size: .76rem; font-weight: 550; color: var(--text);
+}
+.legend-chip i { width: 9px; height: 9px; border-radius: 2px; }
+.legend-chip.off { opacity: .4; }
+
+/* ---------------------------------------------------------------------- *
+ * Settings
+ * ---------------------------------------------------------------------- */
+input[type=search], input[type=text], input[type=number], input[type=time],
+input[type=password], select {
+  font: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: .4rem .55rem;
+}
+input[type=search] { flex: 1; min-width: 0; }
+
+details.group summary {
+  cursor: pointer;
+  font-size: .78rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin-bottom: .4rem;
+}
+details.group summary::-webkit-details-marker { display: none; }
+details.group summary::before { content: "▸"; transition: transform var(--dur) var(--ease); }
+details.group[open] summary::before { transform: rotate(90deg); }
+.badge {
+  margin-left: auto;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: .05rem .45rem;
+  font-size: .72rem;
+}
+
+.frow {
+  display: flex; align-items: center; gap: .7rem;
+  padding: .45rem .5rem;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius);
+  flex-wrap: wrap;
+}
+.frow.dirty { border-left-color: var(--accent); background: var(--surface-2); }
+.frow.invalid { border-left-color: var(--crit); }
+/* :not(.switch) matters -- the toggle is itself a <label>, and `.frow label`
+   would otherwise out-specify `.switch` and stretch it across the row. */
+.frow > label:not(.switch) { flex: 1; min-width: 140px; }
+.frow .help { display: block; font-size: .74rem; color: var(--text-dim); }
+.frow input[type=number], .frow input[type=time], .frow input[type=text] { width: 128px; }
+.field-error { width: 100%; color: var(--crit); font-size: .78rem; }
+
+.slider-combo { display: flex; align-items: center; gap: .6rem; flex: 0 0 auto; }
+.slider-combo input[type=range] { width: 140px; accent-color: var(--accent); }
+.slider-combo input[type=number] { width: 76px; }
+
+/* flex:0 0 auto, or the switch grows to fill the row. */
+.switch {
+  position: relative; display: inline-block; flex: 0 0 auto;
+  width: 42px; height: 24px;
+}
+.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.switch span {
+  position: absolute; inset: 0; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  transition: background var(--dur) var(--ease);
+  pointer-events: none;
+}
+.switch span::after {
+  content: ""; position: absolute; top: 3px; left: 3px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.switch input:checked + span { background: var(--ok-bg); border-color: var(--ok); }
+.switch input:checked + span::after { transform: translateX(18px); background: var(--ok); }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.save-row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+label.inline { display: flex; align-items: center; gap: .4rem; font-size: .85rem; }
+
+.save-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(1rem + env(safe-area-inset-bottom));
+  z-index: 30;
+  display: flex; align-items: center; gap: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: .5rem .6rem .5rem 1.1rem;
+  box-shadow: var(--shadow-2);
+  font-size: .85rem;
+}
+.save-bar-actions { display: flex; gap: .4rem; }
+@media (max-width: 899px) { .save-bar { bottom: calc(var(--tabbar) + 1rem + env(safe-area-inset-bottom)); } }
+
+/* ---------------------------------------------------------------------- *
+ * Dialog & toasts
+ * ---------------------------------------------------------------------- */
+dialog {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  padding: 1.2rem;
+  max-width: min(94vw, 400px);
+  box-shadow: var(--shadow-2);
+}
+dialog::backdrop { background: rgba(0, 0, 0, .5); }
+dialog h2 { margin-top: 0; }
+dialog input[type=password] { width: 100%; margin: .6rem 0 .5rem; }
+dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; margin: 1rem 0 0; }
+
+#toasts {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(1rem + env(safe-area-inset-bottom));
+  z-index: 40;
+  display: flex; flex-direction: column; gap: .4rem; align-items: center;
+  pointer-events: none;
+}
+@media (max-width: 899px) { #toasts { bottom: calc(var(--tabbar) + 1rem + env(safe-area-inset-bottom)); } }
+.toast {
+  pointer-events: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: .55rem 1rem;
+  border-radius: 999px;
+  box-shadow: var(--shadow-2);
+  font-size: .85rem;
+  max-width: 90vw;
+  cursor: pointer;
+}
+.toast-ok { border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.toast-error { border-color: color-mix(in srgb, var(--crit) 55%, transparent); }
+@media (prefers-reduced-motion: no-preference) {
+  .toast { animation: toastIn var(--dur) var(--ease); }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; } }
+}

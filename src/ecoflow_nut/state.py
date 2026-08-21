@@ -30,10 +30,23 @@ class DeviceState:
     ac_output_watts: float | None = None
     input_watts: float | None = None
     output_watts: float | None = None
+    # Totals across all ports of each type -- what the UI, NUT and the telemetry
+    # store consume.
     usb_output_watts: float | None = None
     usbc_output_watts: float | None = None
+    # Per-port readings behind those totals. Held separately because frames are
+    # partial: a frame carrying only port 1 must not wipe what port 2 last
+    # reported, so the totals are recomputed from last-known values rather than
+    # from whatever happened to arrive.
+    usb_a1_watts: float | None = None
+    usb_a2_watts: float | None = None
+    usb_c1_watts: float | None = None
+    usb_c2_watts: float | None = None
+    dc_output_watts: float | None = None
     ac_input_present: bool | None = None
     ac_output_on: bool | None = None
+    usb_output_on: bool | None = None
+    dc_output_on: bool | None = None
     remain_charge_minutes: int | None = None
     remain_discharge_minutes: int | None = None
     error_code: int | None = None

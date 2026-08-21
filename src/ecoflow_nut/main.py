@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import signal
@@ -12,8 +13,10 @@ from pathlib import Path
 
 import structlog
 
-from . import devices, pricing, settings_store
-from .autoshutdown import AutoShutdownController, ShutdownAction
+# ``db`` is safe to import eagerly: asyncpg is only referenced under TYPE_CHECKING,
+# so this pulls in the shared bucket arithmetic without the optional dependency.
+from . import db, devices, pricing, settings_store
+from .autoshutdown import AutoShutdownController, EveIdleConfirmer, ShutdownAction
 from .ble_client import EcoFlowBLE
 from .config import Config, load_config
 from .devices import OUTPUT_KINDS, DeviceDriver
@@ -28,6 +31,9 @@ log = structlog.get_logger(__name__)
 # If no successful BLE read happens within this window, exit so the supervisor
 # (systemd / Docker) restarts us from a clean state.
 WATCHDOG_TIMEOUT_SECONDS = 120
+# How often the retention window is applied. Deleting rows is cheap next to the
+# cost of scanning for them, so there is no reason to do it often.
+PRUNE_INTERVAL_SECONDS = 6 * 3600
 
 
 def seed_state() -> DeviceState:
@@ -89,6 +95,10 @@ class Daemon:
         # Last on/off state we commanded the Eve outlet into (the outlet is not
         # polled to avoid extra BLE traffic; None == unknown until first command).
         self._eve_state: bool | None = None
+        # Set while a cut is holding for the Eve's load to go idle, so the UI can
+        # say so rather than claiming "CUT sent" when nothing has been cut yet.
+        self._eve_confirm: EveIdleConfirmer | None = None
+        self._eve_confirm_task: asyncio.Task[None] | None = None
         # Optional SwitchBot Bot (manual server power-button presser).
         self._switchbot: SwitchBot | None = (
             SwitchBot(config.switchbot) if config.switchbot.enabled else None
@@ -119,6 +129,7 @@ class Daemon:
         await self._start_web()
         control = await self._start_control_server()
         watchdog = asyncio.create_task(self._watchdog())
+        pruner = asyncio.create_task(self._prune_loop())
         try:
             backoff = 1.0
             while not self._stop.is_set():
@@ -155,6 +166,7 @@ class Daemon:
                 await self._sleep_or_stop(backoff)
         finally:
             watchdog.cancel()
+            pruner.cancel()
             if control is not None:
                 control.close()
             self._remove_control_socket()
@@ -247,13 +259,22 @@ class Daemon:
         )
         if self._switchbot is not None:
             eve = {**eve, "switchbot_enabled": True}
+        # The browser plots server timestamps, so it needs this host's clock to
+        # place "now" -- a phone's clock can be minutes off. It also paces its
+        # polling off the device's cadence rather than guessing.
+        common = {
+            "server_time": time.time(),
+            "poll_interval_seconds": self._config.ecoflow.poll_interval_seconds,
+        }
         if s is None:
             return {
                 "status": self._latest_status,
                 "updated_seconds_ago": age,
+                **common,
                 **eve,
             }
         return {
+            **common,
             **eve,
             "soc_percent": s.soc_percent,
             "ac_input_watts": s.ac_input_watts,
@@ -264,8 +285,11 @@ class Daemon:
             "usbc_output_watts": s.usbc_output_watts,
             "input_watts": s.input_watts,
             "output_watts": s.output_watts,
+            "dc_output_watts": s.dc_output_watts,
             "ac_input_present": s.ac_input_present,
             "ac_output_on": s.ac_output_on,
+            "usb_output_on": s.usb_output_on,
+            "dc_output_on": s.dc_output_on,
             "remain_charge_minutes": s.remain_charge_minutes,
             "remain_discharge_minutes": s.remain_discharge_minutes,
             "error_code": s.error_code,
@@ -274,26 +298,47 @@ class Daemon:
             "updated_seconds_ago": age,
         }
 
-    async def _web_history(self, minutes: int) -> list[dict[str, object]]:
+    async def _web_history(
+        self, *, since: float, until: float, max_points: int
+    ) -> dict[str, object]:
+        """Down-sampled history over an absolute window, for the UI's chart."""
         if self._store is None:
-            return []
-        return await self._store.history(  # type: ignore[attr-defined]
-            self._config.nut.device_name, minutes
+            return {"points": [], "bucket_seconds": 0}
+        points = await self._store.history(  # type: ignore[attr-defined]
+            self._config.nut.device_name,
+            max_points=max_points,
+            since=since,
+            until=until,
         )
+        # Report the bucket width so the chart can label its resolution without
+        # re-deriving the arithmetic in JS (which would drift).
+        return {
+            "points": points,
+            "bucket_seconds": db.bucket_seconds(until - since, max_points),
+        }
 
-    async def _web_energy(self, minutes: int) -> dict[str, object]:
-        """Energy + HC/HP cost summary over the last ``minutes`` for the UI."""
+    async def _web_energy(self, *, since: float, until: float) -> dict[str, object]:
+        """Energy + HC/HP cost summary over a window, for the UI."""
         if self._store is None:
             return {"enabled": False}
-        minutes = max(1, int(minutes))
-        # ~one bucket per minute, capped so very long ranges stay cheap.
-        bucket_seconds = max(60, (minutes * 60) // 2000 * 1 or 60)
+        span = max(1.0, until - since)
+        # ~one bucket per minute, capped so very long ranges stay cheap. Keep the
+        # 60 s floor: compute_energy classifies buckets by local time-of-day, so
+        # sub-minute buckets add cost without adding accuracy.
+        bucket_seconds = max(60, int(span // 2000) or 60)
         series = await self._store.energy_series(  # type: ignore[attr-defined]
-            self._config.nut.device_name, minutes, bucket_seconds
+            self._config.nut.device_name,
+            0,
+            bucket_seconds,
+            since=since,
+            until=until,
         )
         summary = pricing.compute_energy(series, bucket_seconds, self._config.pricing)
         summary["enabled"] = True
-        summary["minutes"] = minutes
+        summary["minutes"] = round(span / 60)
+        summary["since"] = since
+        summary["until"] = until
+        summary["bucket_seconds"] = bucket_seconds
         return summary
 
     def _get_settings(self) -> dict[str, object]:
@@ -325,6 +370,14 @@ class Daemon:
             "recover_soc_percent": cfg.recover_soc_percent,
             "grace_period_seconds": cfg.grace_period_seconds,
             "cut_outputs": self._cut_outputs(),
+            # The controller latches `triggered` before any I/O, so while we are
+            # holding for the outlet to go idle it already reads as cut. Say what
+            # is actually happening instead.
+            "awaiting_eve_idle": self._eve_confirm is not None,
+            "eve_watts": (
+                self._eve_confirm.last_watts if self._eve_confirm is not None else None
+            ),
+            "eve_confirm_idle_watts": cfg.eve_confirm_idle_watts,
         }
 
     async def control_output(self, kind: str, enabled: bool) -> str:
@@ -339,9 +392,15 @@ class Daemon:
         return f"{kind} {'on' if enabled else 'off'}"
 
     async def control_eve(self, enabled: bool) -> str:
-        """Toggle the downstream HomeKit outlet. Raises on failure."""
+        """Toggle the downstream HomeKit outlet. Raises on failure.
+
+        Cancels any auto-shutdown confirmation still waiting for the load to go
+        idle: an explicit command from the CLI or the dashboard is the operator
+        overruling the wait, and it must not queue behind it on the BLE lock.
+        """
         if self._eve is None:
             raise RuntimeError("eve outlet is not enabled")
+        await self._cancel_eve_confirm()
         await self._eve.set(enabled)
         self._eve_state = enabled
         log.info("control.eve", enabled=enabled)
@@ -545,23 +604,143 @@ class Daemon:
         if packets and client is None:
             log.error("auto_shutdown.no_client", note="cannot send EcoFlow command")
 
-        async def _send() -> None:
-            if client is not None:
-                for packet in packets:
-                    try:
-                        await client.send_command_packet(packet)
-                    except Exception as exc:  # noqa: BLE001
-                        log.error("auto_shutdown.send_failed", error=str(exc))
-                    await asyncio.sleep(0.3)
+        cut_eve = cfg.cut_eve and self._eve is not None
+        # Only a cut waits: restoring power to an idle outlet needs no proof.
+        confirm_first = not enabled and cut_eve and cfg.eve_confirm_idle_watts is not None
+
+        async def _send_ecoflow() -> None:
+            if client is None:
+                return
+            for packet in packets:
+                try:
+                    await client.send_command_packet(packet)
+                except Exception as exc:  # noqa: BLE001
+                    log.error("auto_shutdown.send_failed", error=str(exc))
+                await asyncio.sleep(0.3)
+
+        async def _send_eve() -> None:
             # The HomeKit outlet is an independent cut target on its own radio,
             # so drive it regardless of the EcoFlow link state.
-            if cfg.cut_eve and self._eve is not None:
-                try:
-                    await self.control_eve(enabled)
-                except Exception as exc:  # noqa: BLE001
-                    log.error("auto_shutdown.eve_failed", error=str(exc))
+            try:
+                await self.control_eve(enabled)
+            except Exception as exc:  # noqa: BLE001
+                log.error("auto_shutdown.eve_failed", error=str(exc))
 
-        asyncio.create_task(_send())
+        async def _send() -> None:
+            if confirm_first:
+                # Cut the outlet FIRST when confirming. The Eve hangs off a
+                # DELTA 3 socket, so cutting the AC bank first would kill it --
+                # and the load behind it -- before the confirmation could mean
+                # anything.
+                await self._await_eve_idle()
+                await _send_eve()
+                await _send_ecoflow()
+                return
+            await _send_ecoflow()
+            if cut_eve:
+                await _send_eve()
+
+        # Retained: a confirmation wait can run for a long time, and a task with
+        # no live reference is garbage-collectable mid-flight.
+        task = asyncio.create_task(_send())
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        if confirm_first:
+            self._eve_confirm_task = task
+
+    async def _await_eve_idle(self) -> None:
+        """Hold until the Eve outlet's own draw shows the load has powered down.
+
+        Holds ONE connection for the whole wait: a cold call costs a scan, a BLE
+        connect, a pair-verify and a full GATT read, which would be seconds of
+        airtime per sample. On a read failure the session is dropped and reopened
+        on the next pass, so a flaky link recovers instead of aborting.
+
+        With no timeout configured this waits indefinitely -- deliberately, since
+        cutting a server that is still writing is the thing we are avoiding. The
+        dashboard's Eve Off button cancels this and cuts immediately, and
+        ``eve_confirm_timeout_seconds`` bounds it for the unattended case.
+        """
+        cfg = self._config.auto_shutdown
+        if self._eve is None or cfg.eve_confirm_idle_watts is None:
+            return
+        confirmer = EveIdleConfirmer(cfg, time.monotonic())
+        self._eve_confirm = confirmer
+        # Floored rather than allowed to be 0: a real BLE read takes longer than
+        # this anyway, so the floor only stops a misconfigured 0 spinning hot.
+        poll = max(0.05, float(cfg.eve_confirm_poll_seconds))
+        log.warning(
+            "auto_shutdown.eve_confirm_wait",
+            idle_watts=cfg.eve_confirm_idle_watts,
+            samples=cfg.eve_confirm_samples,
+            timeout=cfg.eve_confirm_timeout_seconds,
+        )
+        try:
+            while True:
+                try:
+                    async with self._eve.session() as eve:
+                        while True:
+                            reading = await eve.read()
+                            if confirmer.observe(reading.watts):
+                                log.critical(
+                                    "auto_shutdown.eve_confirmed_idle",
+                                    watts=reading.watts,
+                                )
+                                return
+                            if confirmer.expired(time.monotonic()):
+                                log.critical(
+                                    "auto_shutdown.eve_confirm_timeout",
+                                    watts=reading.watts,
+                                    note="cutting anyway",
+                                )
+                                return
+                            log.info(
+                                "auto_shutdown.eve_still_drawing",
+                                watts=reading.watts,
+                                consecutive_idle=confirmer.consecutive,
+                            )
+                            await asyncio.sleep(poll)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    # Unreadable is not idle: keep holding, and retry the link.
+                    confirmer.observe(None)
+                    log.error("auto_shutdown.eve_confirm_read_failed", error=str(exc))
+                    if confirmer.expired(time.monotonic()):
+                        log.critical(
+                            "auto_shutdown.eve_confirm_timeout",
+                            note="outlet unreadable; cutting anyway",
+                        )
+                        return
+                    await asyncio.sleep(poll)
+        finally:
+            self._eve_confirm = None
+
+    async def _cancel_eve_confirm(self) -> None:
+        """Stop any in-flight confirmation so a manual command takes over."""
+        task = self._eve_confirm_task
+        self._eve_confirm_task = None
+        if task is None or task.done():
+            return
+        log.warning("auto_shutdown.eve_confirm_cancelled", reason="manual override")
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    async def _prune_loop(self) -> None:
+        """Apply the store's retention window at startup, then periodically.
+
+        Prunes before sleeping so a restart is enough to reclaim space, and so a
+        retention change made in the UI is not deferred by up to a full interval.
+        Both stores no-op when ``retention_days`` is 0 and swallow their own
+        errors, so this can never interrupt the NUT path.
+        """
+        while not self._stop.is_set():
+            if self._store is not None:
+                await self._store.prune(  # type: ignore[attr-defined]
+                    self._config.nut.device_name
+                )
+            await self._sleep_or_stop(PRUNE_INTERVAL_SECONDS)
 
     async def _watchdog(self) -> None:
         while not self._stop.is_set():

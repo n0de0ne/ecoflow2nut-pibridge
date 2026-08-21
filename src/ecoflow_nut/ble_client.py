@@ -35,7 +35,7 @@ from bleak.backends.device import BLEDevice
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 
-from . import devices, keydata, protocol
+from . import delta3, devices, keydata, protocol
 from .config import BleConfig, EcoflowConfig
 from .devices import DeviceDriver
 from .protocol import Packet, PacketError, crc8, crc16
@@ -362,6 +362,7 @@ class EcoFlowBLE:
         ble: BleConfig,
         on_state: Callable[[DeviceState], None] | None = None,
         on_packet: Callable[[Packet], None] | None = None,
+        on_display_payload: Callable[[bytes], None] | None = None,
     ) -> None:
         self._ecoflow = ecoflow
         self._ble = ble
@@ -369,6 +370,12 @@ class EcoFlowBLE:
         # Fires for every decoded frame, recognised or not -- used by the
         # ``sniff`` diagnostic to see traffic no driver claims yet.
         self._on_packet = on_packet
+        # Raw DisplayPropertyUpload payload, before decoding drops the fields we
+        # do not recognise. Only the protocol diagnostic ('read --raw') uses it;
+        # the daemon leaves it unset. DELTA 3 generation only -- that payload is
+        # protobuf, where the DELTA 2's is a fixed-width struct, so 'sniff' is
+        # the equivalent diagnostic there.
+        self._on_display_payload = on_display_payload
         # Raises ValueError on an unknown model, at construction rather than
         # after a connection has been established.
         self._driver: DeviceDriver = devices.get_driver(ecoflow.model)
@@ -691,6 +698,8 @@ class EcoFlowBLE:
 
         if self._on_packet is not None:
             self._on_packet(packet)
+        if self._on_display_payload is not None and delta3.is_display_packet(packet):
+            self._on_display_payload(packet.payload)
 
         if self._driver.handle_packet(self.state, packet):
             log.debug(

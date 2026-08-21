@@ -209,8 +209,9 @@ Full annotated example: [`config/config.example.yaml`](config/config.example.yam
 |-----|---------|---------|
 | `ecoflow.mac` | — (required) | BLE MAC of the power station (find it with `ecoflow-nut scan`) |
 | `ecoflow.serial` | — | Device serial (used for auth + reported to NUT) |
-| `ecoflow.model` | `delta3` | Protocol driver: `delta2max`, `delta2` or `delta3` (see [Hardware support](#3-hardware-support)) |
-| `ecoflow.poll_interval_seconds` | `5` | How often the NUT file is refreshed from the latest state |
+| `ecoflow.model` | `delta3` | Protocol driver: `delta2max`, `delta2`, `delta3` or `raw` (see [Hardware support](#3-hardware-support)) |
+| `ecoflow.poll_interval_seconds` | `5` | How often the BLE link is checked for liveness — a watchdog, **not** a sample rate (see [How often is data sampled?](#how-often-is-data-sampled)) |
+| `nut.min_write_interval_seconds` | `2` | Minimum seconds between rewrites of the NUT state file. A status change is **always** published immediately |
 | `ecoflow.encrypt_type` | `auto` | `auto` reads it from the advertisement; or force `0`/`1`/`7` |
 | `ecoflow.user_id` | `""` | EcoFlow account user id, required for `encrypt_type 7` |
 | `ble.adapter` | `hci0` | BlueZ adapter |
@@ -233,6 +234,7 @@ Full annotated example: [`config/config.example.yaml`](config/config.example.yam
 | `auto_shutdown.load_grace_seconds` | `60` | Debounce for the low-load trigger |
 | `auto_shutdown.cut_ac` / `cut_usb` / `cut_dc` | `true`/`false`/`false` | Which station outputs to cut |
 | `auto_shutdown.cut_eve` | `false` | Also cut a downstream HomeKit-over-BLE outlet (see [Per-load shedding](#per-load-shedding-with-a-homekit-outlet)) |
+| `auto_shutdown.eve_confirm_idle_watts` | `null` | Read the Eve's own draw and only cut once it is at/below this. `null` cuts immediately (see [Confirming at the outlet](#confirming-at-the-outlet-before-cutting)) |
 | `auto_shutdown.restore_on_recovery` | `false` | Re-enable cut outputs when power/SoC recovers |
 | `eve.enabled` | `false` | Master switch for the HomeKit-over-BLE outlet |
 | `eve.device_id` | `""` | HomeKit accessory id (from `eve discover`) |
@@ -316,6 +318,61 @@ Pick `min_load_watts` so it sits between your network-only draw and your
 network-plus-idle-server draw (e.g. fibre+switch ≈ 15 W, +idle Unraid ≈ 75 W →
 `30` works). The threshold is what distinguishes "server still running" from
 "server has finished shutting down".
+
+#### Confirming at the outlet before cutting
+
+That total-AC threshold is a *proxy*. It has to be tuned between two loads, it
+breaks if you plug something else into the bank, and it can fire while the server
+is still writing to its array — at which point the bridge pulls the plug on a
+half-finished shutdown.
+
+If your Eve reports power (most metering Eve Energy units do), the bridge can ask
+the outlet directly instead of inferring. When a trigger fires it connects, reads
+the outlet's **own** draw, and only sends the off command once that draw is
+genuinely idle:
+
+```yaml
+auto_shutdown:
+  eve_confirm_idle_watts: 5      # cut only once the outlet reports <= 5 W
+  eve_confirm_poll_seconds: 15
+  eve_confirm_samples: 2         # two consecutive idle readings, so a dip
+                                 # mid-shutdown isn't mistaken for "finished"
+  eve_confirm_timeout_seconds: null
+```
+
+**Check your hardware first.** The watt reading uses Eve's vendor characteristic,
+and not every SKU exposes it over BLE:
+
+```bash
+ecoflow-nut --config config.yaml eve status --all
+```
+
+Look for a readable (`pr`) entry of type `e863f10d-…`. Run it with the server up
+and again with it off — those two numbers are exactly what to set
+`eve_confirm_idle_watts` between (a powered-down PSU typically idles at 1–3 W).
+Leave the setting blank and nothing changes: the outlet is cut immediately, as
+before.
+
+While waiting, the dashboard's auto-shutdown badge reads *Waiting for load to
+drop · N W* rather than *CUT sent*, so you can see what it is actually doing. The
+Eve **Off** button always overrides and cuts immediately.
+
+> **It waits indefinitely by default.** `eve_confirm_timeout_seconds: null` means
+> the outlet is never cut without a confirmed idle reading — the safest thing for
+> the server, and the reason this feature exists. The cost: if the outlet becomes
+> unreachable, or the server hangs still drawing power, nothing is ever shed and
+> the battery drains to empty, where the server loses power uncleanly anyway. Set
+> a number of seconds to bound that.
+
+> **Give the outlet its own radio.** Confirmation holds one BLE connection open
+> for the whole wait (far cheaper than reconnecting per sample, but continuous
+> rather than one brief blip). On a shared `hci0` that contends with the DELTA 3
+> link the entire time, so a separate dongle (`eve.adapter: hci1`) goes from
+> recommended to strongly advised once this is on.
+
+When confirmation is enabled the Eve is cut **before** the EcoFlow outputs, not
+after — cutting the AC bank first would kill the outlet, and the server behind it,
+before the confirmation could mean anything.
 
 #### Setup (one-time)
 
@@ -419,6 +476,8 @@ already auto-booted from AC restore. Password-protected Bots are not supported.
 ecoflow-nut --config config.yaml read     # connect, read one frame, dump JSON
 ecoflow-nut --config config.yaml run      # run the daemon (default mode)
 ecoflow-nut --config config.yaml ac on    # toggle AC output  (also: ac off)
+ecoflow-nut --config config.yaml read --raw          # every protobuf field the device sends
+ecoflow-nut --config config.yaml read --raw --watch  # ... and mark what changes
 ecoflow-nut --config config.yaml usb on   # toggle USB output (also: usb off)
 ecoflow-nut --config config.yaml dc on    # toggle 12V DC out (also: dc off)
 ```
@@ -431,6 +490,7 @@ ecoflow-nut --config config.yaml eve discover   # list pairable HomeKit accessor
 ecoflow-nut --config config.yaml eve scan       # raw scan: device_id + paired flag
 ecoflow-nut --config config.yaml eve pair       # pair (needs device_id + setup_code)
 ecoflow-nut --config config.yaml eve on         # toggle outlet (also: off / status)
+ecoflow-nut --config config.yaml eve status --all   # dump every characteristic
 ```
 
 Unlike `ac`/`usb`/`dc`, the `eve` commands connect to the outlet directly (its
@@ -476,58 +536,153 @@ ECOFLOW_WEB_TOKEN=somesecret ecoflow-nut --config config.yaml run
 # open http://<bridge-host>:8080
 ```
 
-The dashboard shows SoC, AC in/out watts, USB/USB-C watts, status, runtime and
-charge/discharge estimates (auto-refreshing), with on/off buttons for **AC**,
-**USB** and **12V DC**, plus the auto-shutdown state (and a live enable/disable).
-When the [HomeKit outlet](#per-load-shedding-with-a-homekit-outlet) is enabled, a
-fourth **Eve outlet** control appears in the same panel (showing its last
-commanded on/off state), and a [SwitchBot](#server-power-button-switchbot) **Press**
-button if that's enabled. The published Docker image already includes the web +
-Postgres extras; just set `web.enabled: true` and expose port 8080.
+The UI is a small single-page app with four tabs — a side rail on a desktop, a
+bottom tab bar on a phone. Each tab is a real link (`#/dashboard`, `#/history`,
+`#/energy`, `#/settings`), so they can be bookmarked and the back button works.
+The published Docker image already includes the web + Postgres extras; just set
+`web.enabled: true` and expose port 8080.
 
-It also provides:
+**Dashboard** — SoC, AC in/out watts, USB/USB-C watts, status, runtime and
+charge/discharge estimates, with on/off buttons for **AC**, **USB** and **12V
+DC**, plus the auto-shutdown state and a live enable/disable. When the
+[HomeKit outlet](#per-load-shedding-with-a-homekit-outlet) is enabled, a fourth
+**Eve outlet** control appears (showing its last commanded on/off state), and a
+[SwitchBot](#server-power-button-switchbot) **Press** button if that's enabled.
 
-* **Visual status indicators** — a coloured LED next to each control. The **AC**
-  output shows a true ON/OFF from the device's decoded flag (`flow_info_ac_out`).
-  **USB** is inferred from power draw (the device exposes no USB enable flag), so
-  it reads `ON · NW` when drawing and `— idle/off` otherwise — 0 W is ambiguous,
-  noted in its tooltip. **12V DC** shows `n/a` (the device sends no DC
-  telemetry). The **auto-shutdown** badge is grey *Disabled*, green *Monitoring*,
-  pulsing amber *ARMED · cutting in Ns*, or pulsing red *CUT sent*.
-* **Live settings editing** — a Settings panel edits "runtime-safe" config from
-  the browser: the full auto-shutdown policy (trigger/recover SoC %, grace
-  periods, min-load watts, which outputs to cut, restore-on-recovery), NUT
-  thresholds (low/warning %, runtime-low, AC-present watts, transfer points),
-  poll interval, battery capacity / nominal power, and the electricity pricing.
-  Changes apply **immediately** (no restart) and persist to `settings_file`
-  (`/var/lib/ecoflow-nut/settings.json`), which is overlaid back onto the YAML
-  at the next startup. Edits require the control token.
-* **USB-off guard** — turning the USB output off pops a confirmation, since the
-  bridge host (a Pi) is often powered from the station's USB port.
-* **Hover detail** — the history chart shows the exact SoC / AC-in / AC-out
-  values (and local time) at the point under your cursor.
-* **Energy & cost** — when history logging is on, an Energy panel reports grid
-  energy (kWh), the **Heures Creuses / Heures Pleines** split and cost, average
-  and peak draw, and a projected €/day and €/month — so you can see what your
-  network stack and server cost to run. See [Pricing](#electricity-pricing).
+A coloured LED sits next to each control, each showing a true ON/OFF read from
+the device's own `flow_info_*` flag — **AC**, **USB** and **12V DC** alike. A
+port that is on but idle reads `ON · idle`; one that is drawing shows its watts,
+with USB summing all four ports (two USB-A, two USB-C). The **auto-shutdown**
+badge is grey
+*Disabled*, green *Monitoring*, pulsing amber *ARMED · cutting in Ns*, or pulsing
+red *CUT sent*. Turning the USB output off pops a confirmation, since the bridge
+host is often powered from the station's USB port.
 
-**Auth.** Control actions (port toggles, auto-shutdown) require `auth_token` —
-sent as an `X-Auth-Token` header, `Authorization: Bearer`, or `?token=`. The
-browser prompts for it and stores it locally. If no token is configured the
-controls are disabled and only the read-only dashboard is served; set
-`require_auth_for_read: true` to also gate telemetry. The token can cut power, so
-keep the UI on a trusted network.
+A **Solar input** tile and chart series show PV harvest on models that report it
+(the DELTA 2 generation); it reads `–` rather than `0` on models that do not, so
+"not reported" stays distinguishable from "reporting zero".
+
+**History** — a chart you can navigate. Scroll or pinch to zoom about the
+cursor, drag to pan, double-click or **Reset** to go back to the selected range.
+**Live** pins the right edge to now and un-pins as soon as you pan away. Zooming
+in genuinely increases resolution: the window is re-fetched at a bucket width
+derived from the canvas width, and the caption tells you what you're looking at
+("330 points · 4 min average"). Hovering snaps a crosshair to the nearest actual
+sample and reads out every series at that point; over a gap in the data it
+disappears rather than inventing a value, and lines break across outages instead
+of drawing through them. Every stored metric is chartable — SoC, AC in/out, USB,
+and total input/output watts — toggled from the legend and remembered per
+browser. With the canvas focused, arrow keys pan, `+`/`-` zoom, `Home`/`End` jump
+to the ends, and `1`–`5` pick a range preset.
+
+**Energy** — when history logging is on, grid energy (kWh), the **Heures Creuses
+/ Heures Pleines** split and cost, average and peak draw, and a projected €/day
+and €/month, so you can see what your network stack and server cost to run. It
+follows the same window as the chart, so zooming into last Tuesday costs last
+Tuesday. See [Pricing](#electricity-pricing).
+
+**Settings** — a dedicated page for the "runtime-safe" config: the full
+auto-shutdown policy (trigger/recover SoC %, grace periods, min-load watts, which
+outputs to cut, restore-on-recovery), NUT thresholds (low/warning %, runtime-low,
+AC-present watts, transfer points), the BLE link check, battery capacity /
+nominal power, the electricity pricing, and the history sample interval and
+retention (see [How often is data sampled?](#how-often-is-data-sampled) — this is
+the knob that controls chart detail). Grouped into sections with a search box;
+percentages get a slider bound to a number box; values are validated as you type
+against the same bounds the bridge enforces. Only the fields you actually changed
+are submitted, a counter shows how many are pending, and navigating away with
+unsaved edits asks first. Changes apply **immediately** (no restart) and persist
+to `settings_file` (`/var/lib/ecoflow-nut/settings.json`), which is overlaid back
+onto the YAML at the next startup. Edits require the control token.
+
+The same page also holds browser-only preferences — theme (system/dark/light) and
+refresh rate — which are stored locally and never sent to the bridge.
+
+**Freshness.** The pill in the header distinguishes the two ways live data can
+stop: *live · Ns ago* when telemetry is current, amber *BLE stale* when the
+bridge is up but the device link has gone quiet, and *bridge unreachable* when
+the page cannot reach the bridge at all. Polling paces itself off the device's
+own `poll_interval_seconds` (override it under Settings), pauses entirely while
+the tab is in the background, and backs off when requests fail. Click the pill —
+or press `r` — to refresh immediately.
+
+**Auth.** Control actions (port toggles, auto-shutdown, settings) require
+`auth_token` — sent as an `X-Auth-Token` header, `Authorization: Bearer`, or
+`?token=`. The 🔑 button in the header opens a dialog that validates the token
+against `GET /api/auth/check` before storing it, so a typo says so immediately
+rather than failing on your next action; "Remember on this device" is optional,
+and *Sign out* clears it. If no token is configured on the bridge the controls
+are disabled and only the read-only dashboard is served; set
+`require_auth_for_read: true` to also gate telemetry (the page and its assets
+stay reachable so the browser can still show the unlock prompt). The token can
+cut power, so keep the UI on a trusted network.
 
 #### Telemetry history
 
-When a store is enabled the daemon writes one telemetry sample per poll and the
-dashboard's history charts read it back (down-sampled server-side). The bridge
+When a store is enabled the daemon writes one telemetry sample per frame received
+from the device (subject to `min_interval_seconds`, below) and the dashboard's
+history charts read it back (down-sampled server-side). The bridge
 runs fine if the store is absent or down — logging failures are swallowed and
 never interrupt the NUT path. Both backends store the same columns (`ts, device,
 soc_percent, ac_input_watts, ac_output_watts, usb/usbc watts, input/output watts,
 runtime_seconds, status` + discharge/charge estimates), so you can query either
 directly for your own dashboards (Grafana, etc.). Pick **one** — if both are
 enabled, Postgres wins.
+
+`GET /api/history` serves it back, either over an absolute window (what the
+chart's zoom and pan use) or the last N minutes:
+
+```bash
+# absolute window, at most 500 buckets
+curl 'http://bridge:8080/api/history?since=1735689600&until=1735776000&max_points=500'
+# or relative, unchanged from before
+curl 'http://bridge:8080/api/history?minutes=1440'
+```
+
+`since`/`until` are epoch seconds and the window is half-open, `[since, until)`.
+The response echoes `since`, `until` and the `bucket_seconds` actually used.
+Spans are capped at 30 days and `max_points` at 2000 so a client can't ask a Pi
+to scan its whole table; an empty or future window is a normal empty result, not
+an error. `GET /api/energy` takes the same window. Buckets are anchored to the
+Unix epoch rather than to the window start, so a given bucket covers the same
+interval regardless of how you asked for it.
+
+If you put the UI behind a reverse proxy on a sub-path, proxy `/static/` too —
+the page resolves its assets relative to itself, so a sub-path mount works, but
+only if those requests reach the bridge.
+
+##### How often is data sampled?
+
+**The bridge does not poll the DELTA 3.** It subscribes to a BLE notify
+characteristic and the device pushes `DisplayPropertyUpload` frames on its own
+firmware schedule; the bridge just acks each one to keep the stream flowing.
+There is no command to request a frame or change the device's reporting rate, so
+**the device's push cadence is a hard ceiling on resolution**.
+
+`ecoflow.poll_interval_seconds` is therefore *not* a sample rate, despite the
+name — it only sets how often the bridge checks the link is still up, i.e. how
+long a dropped connection goes unnoticed before reconnecting. Lowering it adds
+no datapoints and sends nothing extra over the radio.
+
+What you actually control is how many of those frames get **stored**:
+
+```yaml
+sqlite:
+  min_interval_seconds: 10   # >= this many seconds between stored rows; 0 = every frame
+  retention_days: 90         # rows older than this are deleted
+```
+
+Lower it for finer charts, at the cost of SD-card writes and disk. Over 90 days,
+roughly: `30` → ~40 MB, `10` → ~115 MB, `5` → ~230 MB, `0` → bounded only by the
+device's push rate. Both values are editable live from the dashboard's
+**Settings → History** section and take effect on the next write, with no
+restart.
+
+Retention is applied at startup and every 6 hours thereafter. Note that deleting
+rows does not shrink the SQLite file — freed pages are reused for new samples, so
+the file plateaus rather than growing without bound. That is deliberate:
+`VACUUM` would rewrite the whole database, which is worse for an SD card than the
+space it reclaims.
 
 **Option A — SQLite (local, self-contained, recommended for a Pi).** A single
 file on the bridge host, no server and **no extra Python dependency** (stdlib
@@ -537,7 +692,7 @@ file on the bridge host, no server and **no extra Python dependency** (stdlib
 sqlite:
   enabled: true
   path: "/var/lib/ecoflow-nut/telemetry.db"   # persistent (NOT /var/run)
-  min_interval_seconds: 30
+  min_interval_seconds: 10
   retention_days: 90
 ```
 

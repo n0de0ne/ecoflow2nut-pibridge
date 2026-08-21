@@ -10,15 +10,21 @@ ecoflow:
   # Which protocol the device speaks. EcoFlow ships two incompatible
   # generations, so this must match the hardware:
   #
-  #   delta2max  DELTA 2 Max (2048 Wh / 2400 W), serial R351/R354, BLE EF-R35…
+  #   delta2max  DELTA 2 Max / E2000 (2048 Wh / 2400 W), serial R351/R354/E201
   #   delta2     DELTA 2 (R331/R335), DELTA 2 Black (R701), DELTA 3 1500 (D361/D365)
   #   delta3     DELTA 3 / DELTA 3 Plus / River 3 (P231…), BLE EF-D3…
+  #   raw        connect and capture only, for a device you cannot identify yet
   #
-  # Spelling is forgiving ("DELTA 2 Max", "delta-2-max" and the serial prefix
-  # all work). Selection is by THIS setting, not by sniffing the serial number,
-  # so a regional or newer revision whose prefix nothing recognises still works
-  # -- just name the generation it belongs to.
+  # Spelling is forgiving ("DELTA 2 Max", "delta-2-max", "e2000" and the serial
+  # prefix all work). Selection is by THIS setting, not by sniffing the serial
+  # number, so a regional or newer revision whose prefix nothing recognises
+  # still works -- just name the generation it belongs to.
   model: "delta2max"
+  # How often the bridge checks the BLE link is still alive -- a watchdog, NOT a
+  # sample rate. Devices push telemetry on their own schedule and cannot be
+  # asked to send faster; lowering this only shortens how long a dropped link
+  # goes unnoticed. For chart resolution see sqlite.min_interval_seconds, and
+  # for how often the NUT file is rewritten see nut.min_write_interval_seconds.
   poll_interval_seconds: 5
 
   # Encryption handshake. "auto" reads the type from the BLE advertisement.
@@ -58,6 +64,12 @@ nut:
   # Fallback "mains present" rule for models that do not measure input voltage
   # (the DELTA 3): AC counts as present only above this many watts of draw.
   ac_input_present_min_watts: 10
+  # Minimum seconds between rewrites of the dummy-ups state file. The DELTA 2
+  # generation streams several subsystem heartbeats per second, and rewriting
+  # on each is pure waste -- NUT's dummy-ups driver re-reads at ups.conf's
+  # pollinterval (2s). A status change is ALWAYS published immediately, so an
+  # outage is never delayed by this.
+  min_write_interval_seconds: 2
   # Preferred rule where the device does measure it (the DELTA 2 generation):
   # mains are present above this many volts. Unlike watts this stays true on a
   # full battery with an idle load, so it will not report a false outage.
@@ -107,7 +119,11 @@ sqlite:
   enabled: false
   path: "/var/lib/ecoflow-nut/telemetry.db"   # persistent file (NOT /var/run)
   table: "ecoflow_samples"
-  min_interval_seconds: 30  # min seconds between persisted rows (0 = every frame)
+  # Minimum seconds between persisted rows, and the main control over how
+  # detailed the dashboard's charts are. Lower = finer charts but more SD-card
+  # writes and a bigger file (roughly: 10s ~= 115 MB over 90 days, 5s ~= 230 MB,
+  # 0 = every frame the device sends). Editable live from the web UI.
+  min_interval_seconds: 10
   retention_days: 90        # auto-prune rows older than this (0 = keep forever)
 
 # Option B -- Postgres. For a central/remote database server. Requires the
@@ -157,6 +173,21 @@ auto_shutdown:
   cut_usb: false                 # KEEP false if the bridge host is USB-powered
   cut_dc: false                  # turn off 12V DC output
   cut_eve: false                 # also cut the downstream HomeKit outlet (see 'eve')
+  # Before cutting the Eve outlet, read the outlet's OWN power draw and wait
+  # until it is really idle -- i.e. the server has finished shutting down rather
+  # than merely looking quiet on the DELTA 3's total AC draw. Needs an Eve that
+  # reports watts: check with 'ecoflow-nut eve status --all' (look for a readable
+  # e863f10d-... characteristic) and read the real running/idle figures there, so
+  # you can set this between them. A powered-down server's PSU standby is
+  # typically 1-3 W. null = off (cut immediately).
+  eve_confirm_idle_watts: null   # e.g. 5
+  eve_confirm_poll_seconds: 15   # seconds between readings while waiting
+  eve_confirm_samples: 2         # consecutive idle readings needed
+  # null = wait indefinitely rather than cut a load that is still drawing. Safest
+  # for the server, but if the outlet is unreachable nothing is ever shed and the
+  # battery drains to 0 (where the server loses power uncleanly anyway). Set a
+  # number of seconds to cut regardless after that long.
+  eve_confirm_timeout_seconds: null
   restore_on_recovery: false     # turn outputs back on when power/SoC recovers
 
 # Optional downstream HomeKit-over-BLE outlet (e.g. an Eve Energy, BLE/non-Thread).

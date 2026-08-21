@@ -222,8 +222,9 @@ Exemple annoté complet : [`config/config.example.yaml`](config/config.example.y
 |-----|--------|---------------|
 | `ecoflow.mac` | — (requis) | Adresse MAC BLE de la station (trouvée avec `ecoflow-nut scan`) |
 | `ecoflow.serial` | — | Numéro de série (utilisé pour l'auth + remonté à NUT) |
-| `ecoflow.model` | `delta3` | Pilote de protocole : `delta2max`, `delta2` ou `delta3` (voir [Matériel supporté](#3-matériel-supporté)) |
-| `ecoflow.poll_interval_seconds` | `5` | Fréquence de rafraîchissement du fichier NUT |
+| `ecoflow.model` | `delta3` | Pilote de protocole : `delta2max`, `delta2`, `delta3` ou `raw` (voir [Matériel supporté](#3-matériel-supporté)) |
+| `ecoflow.poll_interval_seconds` | `5` | Fréquence de vérification du lien BLE — un chien de garde, **pas** une fréquence d'échantillonnage. L'appareil émet sa télémétrie à son propre rythme ; c'est `sqlite.min_interval_seconds` qui détermine la finesse des graphiques |
+| `nut.min_write_interval_seconds` | `2` | Intervalle minimal entre deux réécritures du fichier NUT. Un changement d'état est **toujours** publié immédiatement |
 | `ecoflow.encrypt_type` | `auto` | `auto` lit le type dans l'annonce BLE ; ou forcez `0`/`1`/`7` |
 | `ecoflow.user_id` | `""` | Identifiant de compte EcoFlow, requis pour `encrypt_type 7` |
 | `ble.adapter` | `hci0` | Adaptateur BlueZ |

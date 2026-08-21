@@ -20,6 +20,12 @@ services:
     privileged: true          # required for BLE / BlueZ access
     volumes:
       - ./config/config.yaml:/app/config/config.yaml:ro
+      # Persist the state directory across image updates. The web UI's saved
+      # settings (settings.json), the SQLite telemetry history (if you use the
+      # sqlite backend instead of Postgres) and any HomeKit pairing live here --
+      # without this volume they are inside the container and are destroyed by
+      # every `docker compose up -d` after a pull.
+      - ecoflow-state:/var/lib/ecoflow-nut
     restart: unless-stopped
     depends_on:
       - postgres
@@ -45,3 +51,4 @@ services:
 
 volumes:
   ecoflow-pgdata:
+  ecoflow-state:

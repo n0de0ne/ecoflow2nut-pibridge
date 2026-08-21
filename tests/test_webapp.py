@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from ecoflow_nut import webapp
 from ecoflow_nut.config import WebConfig
 from ecoflow_nut.webapp import WebServer
 
@@ -18,6 +21,8 @@ class _Harness:
         self.control_calls: list[tuple[str, bool]] = []
         self.eve_calls: list[bool] = []
         self.switchbot_calls: list[str] = []
+        self.history_calls: list[tuple[float, float, int]] = []
+        self.energy_calls: list[tuple[float, float]] = []
         self.settings_updates: list[dict[str, object]] = []
         self.autoshutdown_enabled = False
         self.fail_control = False
@@ -40,8 +45,14 @@ class _Harness:
         self.switchbot_calls.append(action)
         return f"switchbot {action}"
 
-    async def history(self, minutes: int) -> list[dict[str, object]]:
-        return [{"ts": "2026-06-05T00:00:00", "soc_percent": 50}]
+    async def history(
+        self, *, since: float, until: float, max_points: int
+    ) -> dict[str, object]:
+        self.history_calls.append((since, until, max_points))
+        return {
+            "points": [{"ts": "2026-06-05T00:00:00", "soc_percent": 50}],
+            "bucket_seconds": 30,
+        }
 
     def autoshutdown_status(self) -> dict[str, object]:
         return {"enabled": self.autoshutdown_enabled, "armed": False}
@@ -58,7 +69,8 @@ class _Harness:
         self.settings_updates.append(updates)
         return {"values": updates, "changed": list(updates)}
 
-    async def energy(self, minutes: int) -> dict[str, object]:
+    async def energy(self, *, since: float, until: float) -> dict[str, object]:
+        self.energy_calls.append((since, until))
         return {"enabled": True, "grid_kwh": 1.5, "total_cost": 0.3, "currency": "€"}
 
 
@@ -107,6 +119,66 @@ async def test_index_served(secured: TestClient) -> None:
     # Visual port + auto-shutdown status indicators are present.
     for marker in ('id="stAc"', 'id="stUsb"', 'id="stDc"', 'id="asLed"'):
         assert marker in body
+    # The shell pulls in its stylesheet and script.
+    assert "app.css" in body and "app.js" in body
+
+
+@pytest.mark.parametrize("name", sorted(webapp._STATIC_ASSETS))
+async def test_static_asset_served(secured: TestClient, name: str) -> None:
+    resp = await secured.get(f"/static/{name}")
+    assert resp.status == 200
+    assert resp.headers["Content-Type"].startswith(webapp._STATIC_ASSETS[name])
+    assert resp.headers["ETag"]
+    assert await resp.read()
+
+
+async def test_static_asset_conditional_get(secured: TestClient) -> None:
+    first = await secured.get("/static/app.css")
+    etag = first.headers["ETag"]
+    again = await secured.get("/static/app.css", headers={"If-None-Match": etag})
+    assert again.status == 304
+
+
+async def test_static_unknown_asset_404(secured: TestClient) -> None:
+    assert (await secured.get("/static/nope.js")).status == 404
+
+
+async def test_static_rejects_nested_paths(secured: TestClient) -> None:
+    # The route matches a single path segment and the handler is an allowlist
+    # lookup, so neither nesting nor traversal can reach the filesystem.
+    assert (await secured.get("/static/sub/app.js")).status == 404
+    assert (await secured.get("/static/../webapp.py")).status == 404
+
+
+async def test_shell_served_without_auth(harness: _Harness) -> None:
+    """The page and its assets stay open so the browser can prompt for a token."""
+    client = await _client(
+        WebConfig(auth_token="s3cret", require_auth_for_read=True), harness
+    )
+    try:
+        assert (await client.get("/")).status == 200
+        assert (await client.get("/static/app.js")).status == 200
+        assert (await client.get("/api/state")).status == 401
+    finally:
+        await client.close()
+
+
+def test_static_allowlist_matches_disk() -> None:
+    """Catches adding a file without registering it (and vice versa)."""
+    static_dir = Path(webapp.__file__).parent / "static"
+    on_disk = {p.name for p in static_dir.iterdir() if p.is_file()}
+    assert on_disk == set(webapp._STATIC_ASSETS)
+
+
+def test_index_references_only_allowlisted_assets() -> None:
+    """A renamed asset would otherwise 404 on first paint."""
+    static_dir = Path(webapp.__file__).parent / "static"
+    index = (static_dir / "index.html").read_text()
+    refs = re.findall(r'(?:src|href)="([^"]+)"', index)
+    local = [r for r in refs if not r.startswith(("http:", "https:", "data:", "#"))]
+    assert local, "expected the shell to reference its own assets"
+    for ref in local:
+        assert ref.removeprefix("static/") in webapp._STATIC_ASSETS, ref
 
 
 async def test_state_exposes_ac_output_flag(secured: TestClient) -> None:
@@ -296,6 +368,61 @@ async def test_history_enabled_returns_points(secured: TestClient) -> None:
     assert body["enabled"] is True
     assert body["minutes"] == 120
     assert body["points"][0]["soc_percent"] == 50
+    assert body["bucket_seconds"] == 30
+
+
+async def test_history_accepts_absolute_window(
+    secured: TestClient, harness: _Harness
+) -> None:
+    """Zoom/pan sends an explicit window; it reaches the store unchanged."""
+    resp = await secured.get("/api/history?since=1700000000&until=1700003600")
+    body = await resp.json()
+    assert (body["since"], body["until"]) == (1700000000, 1700003600)
+    assert body["minutes"] == 60
+    assert harness.history_calls[-1][:2] == (1700000000.0, 1700003600.0)
+
+
+async def test_history_minutes_still_supported(
+    secured: TestClient, harness: _Harness
+) -> None:
+    """The original relative form keeps working for anything already using it."""
+    await secured.get("/api/history?minutes=120")
+    since, until, _ = harness.history_calls[-1]
+    assert until - since == pytest.approx(7200)
+
+
+async def test_history_rejects_inverted_window(secured: TestClient) -> None:
+    resp = await secured.get("/api/history?since=1700003600&until=1700000000")
+    assert resp.status == 400
+
+
+async def test_history_rejects_non_numeric_since(secured: TestClient) -> None:
+    assert (await secured.get("/api/history?since=yesterday")).status == 400
+
+
+async def test_history_clamps_max_points(secured: TestClient, harness: _Harness) -> None:
+    await secured.get("/api/history?max_points=99999")
+    assert harness.history_calls[-1][2] == 2000
+    await secured.get("/api/history?max_points=0")
+    assert harness.history_calls[-1][2] == 2
+
+
+async def test_history_caps_span_to_30_days(
+    secured: TestClient, harness: _Harness
+) -> None:
+    """A pan far into the past is clamped rather than scanning the whole table."""
+    until = 1700000000
+    await secured.get(f"/api/history?since={until - 90 * 24 * 3600}&until={until}")
+    since, got_until, _ = harness.history_calls[-1]
+    assert got_until - since == 30 * 24 * 3600
+
+
+async def test_energy_accepts_absolute_window(
+    secured: TestClient, harness: _Harness
+) -> None:
+    """The energy panel follows the same window as the chart."""
+    await secured.get("/api/energy?since=1700000000&until=1700003600")
+    assert harness.energy_calls[-1] == (1700000000.0, 1700003600.0)
 
 
 async def test_require_auth_for_read_blocks_unauthenticated(harness: _Harness) -> None:

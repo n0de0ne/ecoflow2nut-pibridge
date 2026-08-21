@@ -6,11 +6,12 @@ import asyncio
 import json
 import socket as _socket
 import sys
+from typing import Any
 
 import click
 import structlog
 
-from . import devices, eve_outlet, sniffer
+from . import delta3, devices, eve_outlet, protocol, sniffer
 from . import switchbot as switchbot_mod
 from .ble_client import EcoFlowBLE
 from .config import Config, load_config
@@ -37,6 +38,85 @@ async def _read_once(config: Config, timeout: float = 30.0) -> DeviceState:
     finally:
         await client.disconnect()
     return client.state
+
+
+_WIRE_NAMES = {0: "varint", 1: "i64", 2: "bytes", 5: "float"}
+
+
+def _format_value(wire: int, value: Any) -> str:
+    if wire == protocol.WIRE_LEN:
+        raw = bytes(value)
+        return f"<{len(raw)} bytes> {raw.hex()}" if raw else "<empty>"
+    if wire in (protocol.WIRE_I32, protocol.WIRE_I64):
+        return f"{float(value):g}"
+    return str(value)
+
+
+def _print_fields(payload: bytes, seen: dict[int, str]) -> None:
+    """Print one frame's field table, marking what is new or changed.
+
+    ``seen`` accumulates across frames and is updated in place. Accumulating
+    matters: the device sends *partial* frames carrying only what changed, so
+    diffing against the previous frame alone would flag every long-stable field
+    as "changed" the moment it happens to be included again.
+
+    Markers: ``+`` first sight, ``*`` value changed, ``?`` undecoded and in a
+    range worth suspecting.
+    """
+    rows = protocol.decode_fields(payload)
+
+    click.echo(f"{'FIELD':>6} {'WIRE':<7} {'NAME':<30} VALUE")
+    for num, wire, value in sorted(rows, key=lambda r: r[0]):
+        name = delta3.DISPLAY_FIELD_NAMES.get(num, "")
+        rendered = _format_value(wire, value)
+        if num not in seen:
+            marker = "+"
+        elif seen[num] != rendered:
+            marker = "*"
+        elif not name and num in delta3.SUSPECT_FIELDS:
+            marker = "?"
+        else:
+            marker = " "
+        seen[num] = rendered
+        wire_name = _WIRE_NAMES.get(wire, str(wire))
+        click.echo(f"{marker}{num:>5} {wire_name:<7} {name:<30} {rendered}")
+
+    known = sum(1 for num in seen if num in delta3.DISPLAY_FIELD_NAMES)
+    click.echo(
+        f"\n{len(rows)} fields this frame; {len(seen)} seen so far, "
+        f"{known} decoded, {len(seen) - known} unknown"
+    )
+
+
+async def _read_raw(config: Config, *, watch: bool, timeout: float = 30.0) -> None:
+    """Print the full protobuf field table for each DisplayPropertyUpload frame."""
+    frames: asyncio.Queue[bytes] = asyncio.Queue()
+    client = EcoFlowBLE(
+        config.ecoflow,
+        config.ble,
+        on_display_payload=frames.put_nowait,
+    )
+    await client.connect()
+    try:
+        seen: dict[int, str] = {}
+        count = 0
+        while True:
+            try:
+                payload = await asyncio.wait_for(frames.get(), timeout=timeout)
+            except TimeoutError:
+                raise click.ClickException(
+                    f"no telemetry frame within {timeout:.0f}s "
+                    "(is the bridge still running and holding the BLE link?)"
+                ) from None
+            count += 1
+            click.echo(f"\n=== frame {count} ===")
+            _print_fields(payload, seen)
+            if not watch:
+                return
+    except KeyboardInterrupt:  # pragma: no cover - interactive only
+        click.echo("\nstopped")
+    finally:
+        await client.disconnect()
 
 
 async def _send(config: Config, packet) -> None:
@@ -103,11 +183,40 @@ def cli(ctx: click.Context, config_path: str) -> None:
 
 
 @cli.command()
+@click.option(
+    "--raw",
+    "show_raw",
+    is_flag=True,
+    help="Dump every protobuf field the device sends, not just the decoded ones.",
+)
+@click.option(
+    "--watch",
+    "watch",
+    is_flag=True,
+    help="With --raw: keep printing, marking fields that changed. Ctrl-C to stop.",
+)
 @click.pass_context
-def read(ctx: click.Context) -> None:
-    """Connect, read one telemetry frame, and dump state + NUT variables."""
+def read(ctx: click.Context, show_raw: bool, watch: bool) -> None:
+    """Connect, read one telemetry frame, and dump state + NUT variables.
+
+    With --raw, print the full field table instead: number, wire type, value and
+    the name we know it by. Most of what the device sends is undecoded, so this
+    is how you identify a field the bridge is missing -- add --watch and change
+    something on the unit (plug a load into a USB port, say) to see which field
+    number moves.
+
+    Note this opens its own BLE connection, and the DELTA 3 accepts only one at a
+    time, so stop the bridge first: sudo systemctl stop ecoflow-nut-bridge
+    """
     config = load_config(ctx.obj["config_path"])
     configure_logging(config.logging.level, config.logging.format)
+
+    if show_raw:
+        asyncio.run(_read_raw(config, watch=watch))
+        return
+    if watch:
+        raise click.UsageError("--watch only applies with --raw")
+
     state = asyncio.run(_read_once(config))
     variables = build_variables(state, config.nut)
     click.echo(
@@ -118,8 +227,14 @@ def read(ctx: click.Context) -> None:
                 "ac_output_watts": state.ac_output_watts,
                 "solar_input_watts": state.solar_input_watts,
                 "ac_input_voltage": state.ac_input_voltage,
+                "usb_output_watts": state.usb_output_watts,
+                "usbc_output_watts": state.usbc_output_watts,
+                "input_watts": state.input_watts,
+                "output_watts": state.output_watts,
                 "ac_input_present": state.ac_input_present,
                 "ac_output_on": state.ac_output_on,
+                "remain_charge_minutes": state.remain_charge_minutes,
+                "remain_discharge_minutes": state.remain_discharge_minutes,
                 "nut": variables,
             },
             indent=2,
@@ -453,16 +568,51 @@ def eve_off(ctx: click.Context) -> None:
 
 
 @eve.command("status")
+@click.option(
+    "--all",
+    "show_all",
+    is_flag=True,
+    help="Dump every characteristic the accessory exposes (diagnostic).",
+)
 @click.pass_context
-def eve_status(ctx: click.Context) -> None:
-    """Read the outlet's current on/off state."""
+def eve_status(ctx: click.Context, show_all: bool) -> None:
+    """Read the outlet's current on/off state (and power, when it meters).
+
+    With --all, list every characteristic the paired accessory exposes. That is
+    how you find out whether a given unit reports power at all: look for a
+    readable ("pr") entry of type e863f10d-... -- Eve's instantaneous watts.
+    Auto-shutdown's Eve confirmation needs that characteristic to exist.
+    """
     config = load_config(ctx.obj["config_path"])
     configure_logging(config.logging.level, config.logging.format)
+    outlet = eve_outlet.EveOutlet(config.eve)
     try:
-        value = asyncio.run(eve_outlet.EveOutlet(config.eve).status())
+        if show_all:
+            rows = asyncio.run(outlet.characteristics())
+        else:
+            reading = asyncio.run(outlet.read())
     except eve_outlet.EveError as exc:
         raise click.ClickException(str(exc)) from exc
-    click.echo("unknown" if value is None else ("on" if value else "off"))
+
+    if not show_all:
+        state = "unknown" if reading.on is None else ("on" if reading.on else "off")
+        if reading.watts is None:
+            click.echo(f"{state} (this outlet does not report power)")
+        else:
+            click.echo(f"{state}, {reading.watts:.1f} W")
+        return
+
+    click.echo(f"{'AID':>4} {'IID':>5}  {'PERMS':<10} {'TYPE':<36} VALUE")
+    for row in rows:
+        perms = ",".join(row.get("perms") or [])
+        value = row.get("value", "")
+        unit = row.get("unit") or ""
+        label = row.get("description") or ""
+        click.echo(
+            f"{row['aid']:>4} {row['iid']:>5}  {perms:<10} "
+            f"{str(row.get('type', '')):<36} {value}{unit}"
+            + (f"   ({label})" if label else "")
+        )
 
 
 @cli.group()
