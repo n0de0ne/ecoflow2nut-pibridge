@@ -183,14 +183,26 @@ Distinguishing the two failure modes matters:
 | Connects, stays up, but **silent** | Version plausible; check `ecoflow.serial` and `ecoflow.user_id` — auth hashes both |
 | Frames arrive but values are nonsense | Right version, wrong `xor_payload` or wrong layout |
 
-### Known unidentified: the `EF-E2` prefix
+### Known unidentified: the EcoFlow E2000 (`E201` / `EF-E2`)
 
-A unit advertising `EF-E2…` matches **no** module in the reference
-implementation (whose prefixes are `EF-R33`, `EF-R35`, `EF-D3`, `EF-R3`,
-`EF-R2`, `EF-SHP3`, `EF-HW`, `EF-BK`, `EF-6`, `EF-AC`, `EF-F3`, `EF-GE`,
-`EF-WN2`, `EF-KT2`) and rejects V2 framing by disconnecting. It is deliberately
-**not** aliased to a generation in `devices.py`: guessing would point a real
-device at the wrong protocol silently. Identify it with `probe`, then `sniff`.
+The **EcoFlow E2000** (2048 Wh, 2400 W; model `EFE2000-EU-CBOX`, an EU/UK
+release) carries serial prefix **`E201`** and advertises as **`EF-E2` + the last
+four serial characters** — e.g. serial `E201ZE1APH560861` advertises as
+`EF-E20861`.
+
+Its headline specs match the DELTA 2 Max exactly, which makes it tempting to
+assume the DELTA 2 protocol. **Do not.** `E201` appears in none of the fourteen
+prefixes the reference implementation knows (`EF-R33`, `EF-R35`, `EF-D3`,
+`EF-R3`, `EF-R2`, `EF-SHP3`, `EF-HW`, `EF-BK`, `EF-6`, `EF-AC`, `EF-F3`,
+`EF-GE`, `EF-WN2`, `EF-KT2`), and being a 2025 product it is more likely to be
+current-generation hardware in a familiar form factor.
+
+It is deliberately **not** aliased to a generation in `devices.py`: matching
+specs are not evidence of a matching protocol, and guessing would point a real
+device at the wrong one silently. Use `model: raw`, then `probe`, then `sniff`.
+
+Its NUT nameplate values, at least, are known: `battery_capacity_wh: 2048` and
+`realpower_nominal: 2400`.
 
 ### V4 framing
 
