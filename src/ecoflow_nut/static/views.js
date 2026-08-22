@@ -72,6 +72,52 @@ function flowNode(circleId, valueId, wireId, watts, { absent = false } = {}) {
   wire?.classList.toggle("active", live);
 }
 
+/** Inputs minus outputs, in watts. Positive means the battery is gaining.
+ *
+ * An approximation: conversion losses mean the pack does not receive quite
+ * what this says. It is the sign and the order of magnitude that carry the
+ * meaning, and both are right.
+ */
+function netFlow(s) {
+  const parts = [
+    s.ac_input_watts, s.solar_input_watts,
+    s.ac_output_watts, s.dc_output_watts, s.usb_output_watts, s.usbc_output_watts,
+  ];
+  if (parts.every(v => v == null)) return null;
+  const supply = (s.ac_input_watts ?? 0) + (s.solar_input_watts ?? 0);
+  const draw = (s.ac_output_watts ?? 0) + (s.dc_output_watts ?? 0)
+    + (s.usb_output_watts ?? 0) + (s.usbc_output_watts ?? 0);
+  return supply - draw;
+}
+
+/** Which way the battery is going, and how long it has -- with a source.
+ *
+ * Direction cannot come from ups.status: OL means the mains are present, not
+ * that anything is charging. A station covering its load from solar reports OL
+ * while the battery falls, and reading the charge estimate there gave a dash
+ * next to a device that was plainly telling us six hours of discharge.
+ *
+ * The device's own estimate wins when it has one -- it knows its chemistry and
+ * temperature -- and our SoC-and-load figure, the one NUT publishes, stands in
+ * when it does not.
+ */
+function timeLeft(s) {
+  const flow = netFlow(s) ?? 0;
+  const charging = flow > 0;
+  const device = charging ? s.remain_charge_minutes : s.remain_discharge_minutes;
+  const other = charging ? s.remain_discharge_minutes : s.remain_charge_minutes;
+
+  if (device != null) return { charging, text: fmtMinutes(device), source: "device" };
+  // The device gave an estimate for the other direction only: honour that
+  // rather than the flow, since a real number beats an inferred direction.
+  if (other != null) {
+    return { charging: !charging, text: fmtMinutes(other), source: "device" };
+  }
+  const ours = fmtRuntime(s.runtime_seconds);
+  if (charging || ours === "idle") return { charging, text: "–", source: null };
+  return { charging: false, text: ours, source: "estimate" };
+}
+
 function renderFlow(s) {
   if (!el("#flow")) return;
   flowNode("#nAcIn", "#flowAcIn", "#wAcIn", s.ac_input_watts);
@@ -89,11 +135,9 @@ function renderFlow(s) {
   fill.classList.toggle("crit", soc != null && soc < 15);
   fill.classList.toggle("warn", soc != null && soc >= 15 && soc < 30);
 
-  const charging = (s.status || "").startsWith("OL");
-  const mins = charging ? s.remain_charge_minutes : s.remain_discharge_minutes;
-  const estimate = fmtMinutes(mins);
+  const left = timeLeft(s);
   el("#flowRemain").textContent =
-    estimate === "–" ? "" : `${charging ? "full in" : "left"} ${estimate}`;
+    left.text === "–" ? "" : `${left.charging ? "full in" : "left"} ${left.text}`;
 }
 
 /** Mark the auto-shutdown trigger level, so headroom before a cut is visible. */
@@ -140,23 +184,24 @@ function renderState(s) {
       document.title = `${s.device_model} · Bridge`;
     }
   }
+  // Only what the diagram cannot state itself: every port's watts are on it
+  // already, so repeating them here was four tiles saying nothing new.
   const num = (id, value) => { el(id).textContent = value; };
   num("#soc", s.soc_percent ?? "–");
-  el("#socFill").style.width = `${s.soc_percent ?? 0}%`;
-  num("#acIn", Math.round(s.ac_input_watts ?? 0));
-  num("#acOut", Math.round(s.ac_output_watts ?? 0));
-  // null means the model does not report PV at all, which is not the same
-  // as reporting zero -- show a dash rather than a misleading 0.
-  num("#solarIn", s.solar_input_watts == null
-    ? "–" : Math.round(s.solar_input_watts));
-  num("#usb", Math.round((s.usb_output_watts ?? 0) + (s.usbc_output_watts ?? 0)));
-  num("#runtime", fmtRuntime(s.runtime_seconds));
-  // Label the direction only when there is a figure to label. "chg -" asserts
-  // a charge that a full battery on mains is not doing.
-  const charging = (s.status || "").startsWith("OL");
-  const mins = charging ? s.remain_charge_minutes : s.remain_discharge_minutes;
-  const estimate = fmtMinutes(mins);
-  num("#remain", estimate === "–" ? "–" : `${charging ? "chg" : "dsg"} ${estimate}`);
+  num("#acInV", s.ac_input_voltage == null
+    ? "–" : `${Math.round(s.ac_input_voltage)} V`);
+  // Time-remaining lives on the battery itself; repeating it here would make
+  // this strip a second copy of the diagram again. Net flow is the thing the
+  // diagram implies but never states: which way the battery is going, and how
+  // hard. The station makes up whatever the inputs do not cover.
+  const flow = netFlow(s);
+  const net = el("#netFlow");
+  net.textContent = flow == null
+    ? "–" : `${flow > 0 ? "+" : flow < 0 ? "−" : ""}${Math.abs(Math.round(flow))} W`;
+  net.title = flow == null ? ""
+    : flow > 0 ? "Inputs exceed the load; the battery is charging."
+    : flow < 0 ? "The load exceeds the inputs; the battery is covering the rest."
+    : "Inputs match the load.";
   renderFlow(s);
   renderPorts(s);
   applyControlLock();

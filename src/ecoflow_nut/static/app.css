@@ -291,16 +291,6 @@ h2 {
 .metric .value.sm, .metric.sm .value { font-size: 1.15rem; }
 .metric .unit { font-size: .82rem; color: var(--text-dim); margin-left: .2rem; font-weight: 400; }
 
-.soc-bar {
-  height: 8px; border-radius: 999px; background: var(--surface-2);
-  margin-top: .5rem; overflow: hidden;
-}
-.soc-fill {
-  height: 100%; border-radius: 999px;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--ok) 55%, transparent), var(--ok));
-  transition: width .4s var(--ease);
-}
-
 /* First paint only: shimmer where the numbers will land, so the page never
    shows a row of em-dashes. Refreshes update in place and must not flash. */
 .booting .metric .value > span,
@@ -346,12 +336,16 @@ h2 {
   grid-template-columns: repeat(auto-fit, minmax(272px, 1fr));
 }
 .ctl {
+  /* Wraps: on a phone the row ran off the right edge and clipped the Off
+     button, which is the one control you most need to reach in a hurry. */
   display: flex; align-items: center; gap: .55rem;
+  flex-wrap: wrap;
   padding: .6rem .8rem;
   background: var(--surface-2);
   border-radius: var(--radius);
 }
-.ctl .name { font-weight: 600; flex: 1 1 auto; min-width: 0; }
+.ctl .name { font-weight: 600; flex: 1 1 8rem; min-width: 0; }
+.ctl .pstat { flex: 0 1 auto; min-width: 0; }
 .ctl .name .muted { font-size: .76rem; margin: 0; display: block; }
 .ctl-actions { display: flex; gap: .35rem; flex: 0 0 auto; margin-left: auto; }
 
@@ -589,13 +583,47 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
 /* --------------------------------------------------------------------- */
 /* Power flow diagram                                                     */
 /* --------------------------------------------------------------------- */
-.flow-card { display: flex; justify-content: center; }
-.flow { width: 100%; max-width: 420px; height: auto; }
+/* Two columns once there is room: the diagram earns the space, and the
+   controls beside it stop a wide screen being half empty. */
+.dash-grid { display: grid; gap: 16px; }
+.dash-side { display: grid; gap: 16px; align-content: start; }
+@media (min-width: 1080px) {
+  .dash-grid {
+    grid-template-columns: minmax(380px, 5fr) minmax(340px, 4fr);
+    align-items: start;
+  }
+}
+
+.flow-card { display: flex; flex-direction: column; align-items: center; }
+.flow { width: 100%; max-width: 400px; height: auto; }
+
+/* The figures the diagram cannot state precisely, and nothing it already does. */
+.flow-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 28px;
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.fs { display: flex; flex-direction: column; gap: 2px; min-width: 96px; }
+.fs-k {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.fs-v { color: var(--text); font-size: 18px; font-weight: 620; }
+.fs-v .unit { color: var(--text-dim); font-size: 12px; margin-left: 2px; }
 
 /* Wires. Colour carries which port; the name and watts beside every node
    carry identity, so nothing here depends on telling hues apart. */
 .wire {
   fill: none;
+  transition: stroke var(--dur) var(--ease);
   stroke: var(--border);
   stroke-width: 2;
   stroke-linecap: round;
@@ -618,7 +646,13 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
 /* Battery */
 .orb-well { fill: var(--surface-2); }
 .orb-ring { fill: none; stroke: var(--border); stroke-width: 2; }
-.orb-fill { fill: var(--c-soc); opacity: .85; transition: d var(--dur) var(--ease); }
+.orb-fill {
+  fill: var(--c-soc);
+  opacity: .9;
+  /* `d` is animatable in Chromium/Safari and ignored elsewhere, so the level
+     glides where it can and snaps where it cannot -- never a broken frame. */
+  transition: d 400ms var(--ease), fill var(--dur) var(--ease);
+}
 .orb-fill.warn { fill: var(--warn); }
 .orb-fill.crit { fill: var(--crit); }
 /* Both labels sit over the fill once the battery is more than half full, and
@@ -650,7 +684,12 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
 .reserve[hidden] { display: none; }
 
 /* Ports */
-.node { fill: var(--surface-2); stroke: var(--border); stroke-width: 2; }
+.node {
+  fill: var(--surface-2);
+  stroke: var(--border);
+  stroke-width: 2;
+  transition: stroke var(--dur) var(--ease), stroke-width var(--dur) var(--ease);
+}
 .node.on { stroke-width: 2.5; }
 .n-acin.on  { stroke: var(--c-acin); }
 .n-solar.on { stroke: var(--c-solar); }

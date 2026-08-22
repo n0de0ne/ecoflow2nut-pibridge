@@ -38,6 +38,7 @@
 
   <!-- ---------------------------------------------------------------- -->
   <section data-view="dashboard" hidden>
+    <div class="dash-grid">
     <div class="card flow-card">
       <svg id="flow" class="flow" viewBox="0 0 360 320" role="img"
            aria-labelledby="flowTitle" preserveAspectRatio="xMidYMid meet">
@@ -83,30 +84,18 @@
         <text id="flowUsb" class="node-val" x="300" y="267">–</text>
         <text class="node-name" x="300" y="306">USB</text>
       </svg>
-    </div>
 
-    <div class="card">
-      <div class="grid">
-        <div class="metric">
-          <div class="label">State of charge</div>
-          <div class="value"><span id="soc">–</span><span class="unit">%</span></div>
-          <div class="soc-bar"><div id="socFill" class="soc-fill" style="width:0%"></div></div>
-        </div>
-        <div class="metric"><div class="label">AC input</div>
-          <div class="value"><span id="acIn">–</span><span class="unit">W</span></div></div>
-        <div class="metric"><div class="label">AC output</div>
-          <div class="value"><span id="acOut">–</span><span class="unit">W</span></div></div>
-        <div class="metric"><div class="label">Solar input</div>
-          <div class="value"><span id="solarIn">–</span><span class="unit">W</span></div></div>
-        <div class="metric"><div class="label">USB / USB-C</div>
-          <div class="value"><span id="usb">–</span><span class="unit">W</span></div></div>
-        <div class="metric"><div class="label">Runtime est.</div>
-          <div class="value"><span id="runtime">–</span></div></div>
-        <div class="metric"><div class="label">Charge / discharge</div>
-          <div class="value sm"><span id="remain">–</span></div></div>
+      <div class="flow-strip">
+        <div class="fs"><span class="fs-k">Battery</span>
+          <span class="fs-v"><span id="soc">–</span><span class="unit">%</span></span></div>
+        <div class="fs"><span class="fs-k">Net flow</span>
+          <span class="fs-v" id="netFlow">–</span></div>
+        <div class="fs"><span class="fs-k">Grid voltage</span>
+          <span class="fs-v" id="acInV">–</span></div>
       </div>
     </div>
 
+    <div class="dash-side">
     <div class="card">
       <h2>Port controls</h2>
       <div class="controls">
@@ -148,6 +137,8 @@
       </div>
       <p id="asDetail" class="muted"></p>
       <a class="link" href="#/settings">Configure policy →</a>
+    </div>
+    </div>
     </div>
   </section>
 
