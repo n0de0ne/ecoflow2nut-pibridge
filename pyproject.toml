@@ -28,6 +28,8 @@ web = ["aiohttp>=3.9"]
 postgres = ["asyncpg>=0.29"]
 # Drive a downstream HomeKit-over-BLE outlet (e.g. Eve Energy) as a cut target.
 eve = ["aiohomekit>=3.1"]
+# Publish to MQTT with Home Assistant discovery.
+mqtt = ["aiomqtt>=2.0"]
 # Convenience: both optional server features.
 server = ["aiohttp>=3.9", "asyncpg>=0.29"]
 dev = [

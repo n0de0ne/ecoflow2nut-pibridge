@@ -50,6 +50,8 @@ python3 -m venv "${APP_DIR}/.venv"
 # Kept as its own best-effort step because it is the one dependency that has to
 # build on some platforms, and a bridge that will not install because an
 # *optional* outlet driver would not compile is a bad trade.
+# Home Assistant via MQTT discovery. Inert unless mqtt.enabled is set.
+"${APP_DIR}/.venv/bin/pip" install "${APP_DIR}[mqtt]"
 if ! "${APP_DIR}/.venv/bin/pip" install "${APP_DIR}[eve]"; then
     echo "==> NOTE: the optional [eve] extra (aiohomekit) did not install."
     echo "    Everything else is fine; only 'ecoflow-nut eve ...' needs it."
@@ -132,6 +134,12 @@ Optional web UI (control dashboard):
   - Open http://<pi-ip>:8080
   - For Postgres history set 'postgres.enabled: true' and a 'dsn' (or
     ECOFLOW_PG_DSN). The aiohttp/asyncpg deps are already installed above.
+
+Optional Home Assistant integration (MQTT discovery):
+  - Set 'mqtt.enabled: true' and 'mqtt.host' to your broker, then restart.
+  - Every sensor and switch appears in HA as one device. No YAML in HA.
+  - Put the broker password in ECOFLOW_MQTT_PASSWORD via a systemd drop-in
+    rather than in config.yaml, which is world-readable in /etc.
 
 Optional Eve outlet (cut ONE downstream load, not the whole AC bank):
   - Reset the outlet and remove it from Apple Home first: a HomeKit accessory

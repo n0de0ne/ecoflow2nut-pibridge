@@ -14,6 +14,7 @@ DEFAULT_CONTROL_SOCKET = "/var/run/nut/ecoflow-nut.sock"
 # Environment overrides for secrets, so they need not live in the YAML file.
 ENV_WEB_TOKEN = "ECOFLOW_WEB_TOKEN"
 ENV_PG_DSN = "ECOFLOW_PG_DSN"
+ENV_MQTT_PASSWORD = "ECOFLOW_MQTT_PASSWORD"
 
 
 @dataclass(slots=True)
@@ -274,6 +275,37 @@ class PricingConfig:
 
 
 @dataclass(slots=True)
+class MqttConfig:
+    """Publish to MQTT with Home Assistant discovery.
+
+    Disabled by default. When enabled the bridge announces itself once as a
+    single HA *device* carrying every sensor and switch, then publishes one
+    retained JSON state message per update -- so HA sees the current values the
+    moment it subscribes, without waiting for the next reading.
+
+    The broker credentials may come from the environment instead of this file
+    (``ECOFLOW_MQTT_PASSWORD``), which matters because config.yaml lives
+    world-readable in /etc.
+    """
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 1883
+    username: str = ""
+    password: str = ""
+    # Where this bridge's own topics live.
+    base_topic: str = "ecoflow"
+    # HA's discovery root. Only change it if you changed it in HA.
+    discovery_prefix: str = "homeassistant"
+    # Identifies the device in HA and namespaces the topics. Defaults to the
+    # NUT device name so two stations on one broker never collide.
+    device_id: str = ""
+    client_id: str = "ecoflow-nut-bridge"
+    keepalive_seconds: int = 60
+    tls: bool = False
+
+
+@dataclass(slots=True)
 class Config:
     ecoflow: EcoflowConfig
     ble: BleConfig = field(default_factory=BleConfig)
@@ -286,6 +318,7 @@ class Config:
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
     sqlite: SqliteConfig = field(default_factory=SqliteConfig)
     pricing: PricingConfig = field(default_factory=PricingConfig)
+    mqtt: MqttConfig = field(default_factory=MqttConfig)
     # Local control socket: the running daemon listens here so the CLI can send
     # output commands over the daemon's existing BLE connection (the device only
     # allows one connection at a time).
@@ -379,6 +412,11 @@ def load_config(path: str | Path) -> Config:
     sqlite = SqliteConfig(**_filter(SqliteConfig, raw.get("sqlite", {})))
     pricing = PricingConfig(**_filter(PricingConfig, raw.get("pricing", {})))
 
+    mqtt = MqttConfig(**_filter(MqttConfig, raw.get("mqtt", {})))
+    mqtt.password = os.environ.get(ENV_MQTT_PASSWORD, mqtt.password)
+    if not mqtt.device_id:
+        mqtt.device_id = nut.device_name
+
     return Config(
         ecoflow=ecoflow,
         ble=ble,
@@ -390,6 +428,7 @@ def load_config(path: str | Path) -> Config:
         web=web,
         postgres=postgres,
         sqlite=sqlite,
+        mqtt=mqtt,
         pricing=pricing,
         control_socket_path=raw.get("control_socket_path", DEFAULT_CONTROL_SOCKET),
         settings_file=raw.get("settings_file", "/var/lib/ecoflow-nut/settings.json"),

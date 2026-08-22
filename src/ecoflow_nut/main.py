@@ -123,9 +123,10 @@ class Daemon:
         # render as "awaiting device", which is no way to tell them apart.
         self._link_state = "starting"
         self._link_error: str | None = None
-        # Optional subsystems (web UI / Postgres), created in run() when enabled.
+        # Optional subsystems (web UI / Postgres / MQTT), created in run().
         self._web: object | None = None
         self._store: object | None = None
+        self._mqtt: object | None = None
         self._bg_tasks: set[asyncio.Task[None]] = set()
 
     def request_stop(self, *_: object) -> None:
@@ -140,6 +141,7 @@ class Daemon:
 
         await self._start_store()
         await self._start_web()
+        await self._start_mqtt()
         control = await self._start_control_server()
         watchdog = asyncio.create_task(self._watchdog())
         pruner = asyncio.create_task(self._prune_loop())
@@ -191,6 +193,7 @@ class Daemon:
             if control is not None:
                 control.close()
             self._remove_control_socket()
+            await self._stop_mqtt()
             await self._stop_web()
             await self._stop_store()
         return 0
@@ -221,6 +224,35 @@ class Daemon:
         except Exception as exc:  # noqa: BLE001 - DB must not prevent the bridge
             log.error("db.start_failed", error=str(exc), error_type=type(exc).__name__)
             self._store = None
+
+    async def _start_mqtt(self) -> None:
+        """Bring up the MQTT publisher. Never fatal: the broker is a consumer,
+        not a dependency, so a bad host must not stop NUT being served."""
+        cfg = self._config.mqtt
+        if not cfg.enabled:
+            return
+        try:
+            from .mqtt import MqttPublisher
+
+            publisher = MqttPublisher(
+                cfg,
+                device_model=self._config.nut.static_values.model,
+                device_serial=self._config.nut.static_values.serial,
+                control=self.control_output,
+            )
+            await publisher.start()
+            self._mqtt = publisher
+        except Exception as exc:  # noqa: BLE001
+            log.error("mqtt.start_failed", error=str(exc), error_type=type(exc).__name__)
+            self._mqtt = None
+
+    async def _stop_mqtt(self) -> None:
+        if self._mqtt is not None:
+            try:
+                await self._mqtt.stop()  # type: ignore[attr-defined]
+            except Exception as exc:  # noqa: BLE001
+                log.warning("mqtt.stop_failed", error=str(exc))
+            self._mqtt = None
 
     async def _stop_store(self) -> None:
         if self._store is not None:
@@ -554,6 +586,10 @@ class Daemon:
         # blocks -- a client that cannot keep up drops frames instead.
         if self._web is not None and self._web.has_listeners:  # type: ignore[attr-defined]
             self._web.publish(self._web_state())  # type: ignore[attr-defined]
+        if self._mqtt is not None:
+            # Records the snapshot only; the publisher's own task does the
+            # writing, so a slow broker never reaches the decode path.
+            self._mqtt.publish(self._web_state())  # type: ignore[attr-defined]
         if self._store is not None:
             self._record_sample(state, status, self._latest_runtime)
         log.info(

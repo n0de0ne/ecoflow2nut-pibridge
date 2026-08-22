@@ -94,6 +94,24 @@ auto_shutdown:
   cut_dc: false
   restore_on_recovery: false
 
+# Home Assistant, via MQTT discovery. Point it at your broker (the Mosquitto
+# add-on, usually) and every sensor and switch appears as one HA device with no
+# YAML on the HA side. Needs the optional extra, which systemd/install.sh
+# installs: pip install ecoflow-nut-bridge[mqtt]
+#
+# Prefer ECOFLOW_MQTT_PASSWORD (a systemd drop-in) over putting the password
+# here -- this file is world-readable in /etc.
+mqtt:
+  enabled: false
+  host: "127.0.0.1"           # your HA / Mosquitto host
+  port: 1883
+  username: ""
+  password: ""
+  base_topic: "ecoflow"
+  discovery_prefix: "homeassistant"
+  device_id: ""               # defaults to nut.device_name; make it unique per station
+  tls: false
+
 # Optional downstream HomeKit-over-BLE outlet (e.g. an Eve Energy). Lets the
 # bridge cut ONE load -- a server, say -- while the E2000's other AC sockets
 # stay powered, which its own all-or-nothing AC bank cannot do. Enabling this
