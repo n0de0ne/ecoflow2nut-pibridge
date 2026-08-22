@@ -7,7 +7,7 @@
  */
 
 import {
-  api, applyTheme, autoStore, el, els, fmtAgo, getRefresh, getTheme,
+  api, applyTheme, autoStore, BASE, el, els, fmtAgo, getRefresh, getTheme,
   healthStore, resolveRefreshMs, setToken, stateStore, toast,
 } from "./core.js";
 import {
@@ -18,6 +18,9 @@ import {
 const VIEWS = { dashboard, history, energy, settings };
 const DEFAULT_VIEW = "dashboard";
 const MAX_BACKOFF_MS = 30000;
+// How often to poll for the things the push stream does not carry, once it is
+// live. Auto-shutdown state changes on human timescales.
+const IDLE_POLL_MS = 10000;
 
 let current = null;
 let currentName = null;
@@ -115,8 +118,63 @@ async function tick() {
 
 function schedule(delay) {
   clearTimeout(timer);
+  // While the push stream is live, state arrives on its own. Keep a slow poll
+  // only for what the stream does not carry (auto-shutdown), and let the timer
+  // lapse entirely on views that need nothing else.
+  if (events && events.readyState !== EventSource.CLOSED) {
+    if (!current?.needs?.includes("auto")) return;
+    timer = setTimeout(tick, delay ?? IDLE_POLL_MS);
+    return;
+  }
   const wait = delay ?? Math.min(baseInterval() * backoff, MAX_BACKOFF_MS);
   timer = setTimeout(tick, wait);
+}
+
+// ---------------------------------------------------------------------- //
+// Push stream
+// ---------------------------------------------------------------------- //
+
+let events = null;
+
+/** Subscribe to /api/events, so telemetry arrives when the device sends it.
+ *
+ * Polling stays as the fallback: EventSource cannot carry an auth header, so a
+ * bridge with require_auth_for_read needs the token on the query string, and
+ * any transport that will not open simply leaves the poll scheduler running.
+ */
+function openEventStream() {
+  if (!window.EventSource || events) return;
+  const token = getToken();
+  const url = BASE + "api/events" + (token ? `?token=${encodeURIComponent(token)}` : "");
+  try {
+    events = new EventSource(url);
+  } catch {
+    return;                              // fall back to polling
+  }
+  events.onmessage = e => {
+    try {
+      stateStore.set(JSON.parse(e.data));
+    } catch {
+      return;                            // a malformed frame is not a failure
+    }
+    healthStore.set({ ok: true, reason: "" });
+    document.body.classList.remove("booting");
+    backoff = 1;
+  };
+  events.onopen = () => schedule();      // stand the fast poll down
+  events.onerror = () => {
+    // EventSource reconnects on its own; resume polling meanwhile so a stream
+    // that never comes back does not leave the dashboard frozen.
+    if (events.readyState === EventSource.CLOSED) { events = null; }
+    schedule(0);
+  };
+}
+
+function reopenEventStream() {
+  events?.close();
+  events = null;
+  openEventStream();
+  schedule(0);
 }
 
 // ---------------------------------------------------------------------- //
@@ -192,6 +250,10 @@ async function submitToken(event) {
     dialog.close();
     toast("Controls unlocked", "ok");
     applyControlLock();
+    // The stream carries the token in its URL, so it has to be reopened with
+    // the new one -- otherwise a bridge with require_auth_for_read keeps
+    // refusing the old stream while every other request now succeeds.
+    reopenEventStream();
     if (currentName === "settings") settings.load();
   } catch (err) {
     setToken("", false);
@@ -224,6 +286,7 @@ function wireGlobals() {
   el("#tokenClear").addEventListener("click", () => {
     setToken("", false);
     applyControlLock();
+    reopenEventStream();
     toast("Token cleared", "info");
   });
   el("#tokenDialog").querySelector("form").addEventListener("submit", submitToken);
@@ -248,10 +311,16 @@ function wireGlobals() {
   // Backgrounded tabs stop polling entirely and refresh the moment they return.
   // pageshow covers iOS restoring from the back-forward cache.
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) clearTimeout(timer);
-    else schedule(0);
+    if (document.hidden) {
+      clearTimeout(timer);
+      // Hold the socket open: a backgrounded tab that drops it pays a full
+      // reconnect on return, and the server drops frames rather than queueing.
+      return;
+    }
+    openEventStream();
+    schedule(0);
   });
-  window.addEventListener("pageshow", () => schedule(0));
+  window.addEventListener("pageshow", () => { openEventStream(); schedule(0); });
 
   window.addEventListener("beforeunload", e => {
     if (currentName === "settings" && settings.isDirty()) e.preventDefault();
@@ -280,4 +349,5 @@ healthStore.subscribe(renderFreshness);
 applyTheme(getTheme());
 wireGlobals();
 window.addEventListener("hashchange", onHashChange);
+openEventStream();
 navigate(routeName());

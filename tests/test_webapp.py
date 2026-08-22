@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -465,3 +467,113 @@ def test_state_reports_how_often_it_publishes(tmp_path):
     payload = Daemon(config)._web_state()
     assert payload["publish_interval_seconds"] == 2.0
     assert payload["poll_interval_seconds"] == 60, "still reported, just not paced on"
+
+
+async def _events_server(
+    harness: _Harness, config: WebConfig | None = None
+) -> tuple[TestClient, WebServer]:
+    server = WebServer(
+        config or WebConfig(auth_token="s3cret"),
+        state_provider=harness.state,
+        control=harness.control,
+        history=harness.history,
+        autoshutdown_status=harness.autoshutdown_status,
+        get_settings=harness.get_settings,
+        update_settings=harness.update_settings,
+        energy=harness.energy,
+        history_enabled=True,
+    )
+    client = TestClient(TestServer(server.build_app()))
+    await client.start_server()
+    return client, server
+
+
+async def _next_event(resp, timeout: float = 5.0) -> dict:
+    """Read one SSE ``data:`` frame, skipping keepalive comments."""
+    while True:
+        line = await asyncio.wait_for(resp.content.readline(), timeout=timeout)
+        if not line:
+            raise AssertionError("stream closed")
+        if line.startswith(b"data: "):
+            return json.loads(line[len(b"data: "):])
+
+
+async def test_events_stream_opens_with_the_current_state(harness: _Harness) -> None:
+    """A fresh page must paint at once, not wait for the next frame to arrive."""
+    client, _server = await _events_server(harness)
+    try:
+        resp = await client.get("/api/events")
+        assert resp.status == 200
+        assert resp.headers["Content-Type"].startswith("text/event-stream")
+        first = await _next_event(resp)
+        assert first["soc_percent"] == 55
+        assert first["control_enabled"] is True
+        resp.close()
+    finally:
+        await client.close()
+
+
+async def test_publish_pushes_to_an_open_stream(harness: _Harness) -> None:
+    """The point of the whole exercise: telemetry arrives without being asked for."""
+    client, server = await _events_server(harness)
+    try:
+        resp = await client.get("/api/events")
+        await _next_event(resp)  # the opening snapshot
+        server.publish({"soc_percent": 42, "status": "OB"})
+        pushed = await _next_event(resp)
+        assert pushed["soc_percent"] == 42
+        assert pushed["status"] == "OB"
+        resp.close()
+    finally:
+        await client.close()
+
+
+async def test_publish_without_listeners_is_a_no_op(harness: _Harness) -> None:
+    """It runs on the decode path, so it must be free when nobody is watching."""
+    _client, server = await _events_server(harness)
+    try:
+        server.publish({"soc_percent": 1})  # must not raise
+    finally:
+        await _client.close()
+
+
+def test_a_slow_client_loses_frames_rather_than_stalling_the_bridge() -> None:
+    """Back-pressure must never reach the BLE decode path.
+
+    Telemetry is a snapshot, not a log: when a browser cannot keep up the right
+    thing to lose is the stalest reading, not the newest -- and never the
+    caller's time.
+    """
+    server = WebServer(
+        WebConfig(),
+        state_provider=dict,
+        control=None,  # type: ignore[arg-type]
+        history=None,  # type: ignore[arg-type]
+        autoshutdown_status=dict,
+        get_settings=dict,
+        update_settings=None,  # type: ignore[arg-type]
+        energy=None,  # type: ignore[arg-type]
+    )
+    queue: asyncio.Queue = asyncio.Queue(maxsize=2)
+    server._subscribers.add(queue)
+
+    for soc in range(6):
+        server.publish({"soc_percent": soc})
+
+    assert queue.qsize() == 2, "bounded, so a dead client cannot grow without limit"
+    kept = [queue.get_nowait()["soc_percent"], queue.get_nowait()["soc_percent"]]
+    assert kept == [4, 5], "the newest readings survive, not the oldest"
+
+
+async def test_events_stream_honours_read_auth(harness: _Harness) -> None:
+    """require_auth_for_read must gate the push stream like every other read."""
+    config = WebConfig(auth_token="s3cret", require_auth_for_read=True)
+    client, _server = await _events_server(harness, config)
+    try:
+        assert (await client.get("/api/events")).status == 401
+        # EventSource cannot set headers, so the token rides on the query string.
+        ok = await client.get("/api/events?token=s3cret")
+        assert ok.status == 200
+        ok.close()
+    finally:
+        await client.close()

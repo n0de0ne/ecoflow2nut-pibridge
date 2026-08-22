@@ -468,15 +468,30 @@ def _merge_pd_ports(state: DeviceState, pd: dict[str, Any]) -> None:
         state.dc_output_on = bool(v)
 
 
+# What the device sends for "I have no estimate": 5999 minutes, which renders
+# as a perfectly plausible-looking 99h 59m. A full battery on mains reports it
+# for charge time, and it would otherwise reach NUT's battery.runtime and the
+# telemetry history as if it were a real reading.
+NO_ESTIMATE_MINUTES = 5999
+
+
+def _remain_minutes(value: Any) -> int | None:
+    """A remaining-time field, or None where the device means "unknown"."""
+    minutes = int(value)
+    if minutes >= NO_ESTIMATE_MINUTES or minutes < 0:
+        return None
+    return minutes
+
+
 def _merge_ems(state: DeviceState, ems: dict[str, Any]) -> None:
     if (v := ems.get("f32_lcd_show_soc")) is not None:
         state.update_soc(float(v), "ems")
     elif (v := ems.get("lcd_show_soc")) is not None:
         state.update_soc(float(v), "ems")
     if (v := ems.get("chg_remain_time")) is not None:
-        state.remain_charge_minutes = int(v)
+        state.remain_charge_minutes = _remain_minutes(v)
     if (v := ems.get("dsg_remain_time")) is not None:
-        state.remain_discharge_minutes = int(v)
+        state.remain_discharge_minutes = _remain_minutes(v)
 
 
 def _merge_bms(state: DeviceState, bms: dict[str, Any]) -> None:

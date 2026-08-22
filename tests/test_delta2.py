@@ -497,3 +497,45 @@ def test_solar_is_none_on_a_model_that_never_reports_it():
     payload = rawstruct.pack(delta2.EMS_HEARTBEAT, {"f32_lcd_show_soc": 50.0})
     delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x02, payload))
     assert state.solar_input_watts is None
+
+
+def test_a_missing_time_estimate_is_not_a_hundred_hours():
+    """5999 minutes is the device's "no estimate", not 99h 59m.
+
+    A full battery on mains reports it for time-to-charge, and it renders as a
+    perfectly plausible duration -- so without this it reaches the dashboard,
+    NUT's battery.runtime and the telemetry history as a real reading.
+    """
+    payload = rawstruct.pack(
+        delta2.EMS_HEARTBEAT,
+        {"chg_remain_time": 5999, "dsg_remain_time": 5999, "f32_lcd_show_soc": 100.0},
+    )
+    state = DeviceState()
+    assert delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x02, payload))
+    assert state.remain_charge_minutes is None
+    assert state.remain_discharge_minutes is None
+    assert state.soc_percent == pytest.approx(100), "the rest of the frame still merges"
+
+
+def test_real_time_estimates_still_come_through():
+    payload = rawstruct.pack(
+        delta2.EMS_HEARTBEAT, {"chg_remain_time": 95, "dsg_remain_time": 512}
+    )
+    state = DeviceState()
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x02, payload))
+    assert state.remain_charge_minutes == 95
+    assert state.remain_discharge_minutes == 512
+
+
+def test_a_partial_ems_frame_keeps_the_last_known_estimate():
+    """Only assign what the frame carried -- truncation must not wipe a reading."""
+    state = DeviceState()
+    full = rawstruct.pack(delta2.EMS_HEARTBEAT, {"chg_remain_time": 95})
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x02, full))
+    assert state.remain_charge_minutes == 95
+
+    ems = delta2.EMS_HEARTBEAT
+    short_of_chg = ems[: _index_of(ems, "chg_remain_time")]
+    cut = full[: rawstruct.size_of(short_of_chg)]
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x02, cut))
+    assert state.remain_charge_minutes == 95, "never mentioned, so never changed"

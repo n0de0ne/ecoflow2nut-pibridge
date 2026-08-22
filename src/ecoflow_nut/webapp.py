@@ -12,14 +12,19 @@ set. The token is accepted as an ``X-Auth-Token`` header, an
 
 The single-page dashboard (HTML/CSS/JS, no external CDN) lives in the ``static/``
 directory next to this module: ``/`` serves ``index.html`` and ``/static/{name}``
-serves the stylesheet and scripts. The page polls ``/api/state`` for live values
-and ``/api/history`` for charts.
+serves the stylesheet and scripts. The page reads ``/api/history`` for charts,
+and takes live values from ``/api/events`` -- a Server-Sent Events stream pushed
+the moment the bridge decodes new telemetry -- falling back to polling
+``/api/state`` where EventSource is unavailable or the stream drops.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import hmac
+import json
 import time
 from collections.abc import Awaitable, Callable
 from importlib.resources import files
@@ -123,6 +128,9 @@ class WebServer:
         self._energy = energy
         self._history_enabled = history_enabled
         self._runner: web.AppRunner | None = None
+        # Open /api/events streams. Each is a queue of pending payloads rather
+        # than the socket itself, so publishing never awaits a slow client.
+        self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
 
     # -- lifecycle ---------------------------------------------------------- #
     def build_app(self) -> web.Application:
@@ -140,6 +148,7 @@ class WebServer:
                 web.get("/", self._handle_index),
                 web.get("/static/{name}", self._handle_static),
                 web.get("/api/state", self._handle_state),
+                web.get("/api/events", self._handle_events),
                 web.get("/api/history", self._handle_history),
                 web.get("/api/energy", self._handle_energy),
                 web.get("/api/autoshutdown", self._handle_autoshutdown_get),
@@ -236,10 +245,81 @@ class WebServer:
         from aiohttp import web
 
         self._require_read_auth(request)
+        return web.json_response(self._handle_state_payload())
+
+    @property
+    def has_listeners(self) -> bool:
+        """Whether any dashboard is streaming, so callers can skip the work."""
+        return bool(self._subscribers)
+
+    def publish(self, payload: dict[str, Any]) -> None:
+        """Push a telemetry snapshot to every open ``/api/events`` stream.
+
+        Synchronous and non-blocking on purpose: this is called from the
+        daemon's decode path, which must never wait on a browser. A client that
+        cannot keep up loses its oldest queued frame rather than applying
+        back-pressure to the BLE link.
+        """
+        if not self._subscribers:
+            return
+        enriched = {
+            **payload,
+            "history_enabled": self._history_enabled,
+            "control_enabled": bool(self._config.auth_token),
+        }
+        for queue in self._subscribers:
+            if queue.full():
+                # Telemetry is a snapshot, not a log: the newest reading is the
+                # only one worth having, so drop the stalest and keep going.
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    queue.get_nowait()
+            with contextlib.suppress(asyncio.QueueFull):
+                queue.put_nowait(enriched)
+
+    async def _handle_events(self, request: web.Request) -> web.StreamResponse:
+        """Server-Sent Events: telemetry pushed as the bridge decodes it."""
+        from aiohttp import web
+
+        self._require_read_auth(request)
+        response = web.StreamResponse(
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                # A reverse proxy that buffers this defeats the whole point.
+                "X-Accel-Buffering": "no",
+            }
+        )
+        await response.prepare(request)
+
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=4)
+        self._subscribers.add(queue)
+        try:
+            # Send the current state at once, so a fresh page paints without
+            # waiting for the next frame to arrive.
+            await self._send_event(response, self._handle_state_payload())
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=20)
+                except TimeoutError:
+                    # A comment frame: keeps idle proxies and phones from
+                    # dropping a stream that is merely quiet.
+                    await response.write(b": keepalive\n\n")
+                    continue
+                await self._send_event(response, payload)
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        finally:
+            self._subscribers.discard(queue)
+        return response
+
+    async def _send_event(self, response: web.StreamResponse, payload: Any) -> None:
+        await response.write(f"data: {json.dumps(payload)}\n\n".encode())
+
+    def _handle_state_payload(self) -> dict[str, Any]:
         payload = self._state_provider()
         payload["history_enabled"] = self._history_enabled
         payload["control_enabled"] = bool(self._config.auth_token)
-        return web.json_response(payload)
+        return payload
 
     async def _handle_history(self, request: web.Request) -> web.Response:
         from aiohttp import web

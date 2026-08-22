@@ -88,10 +88,12 @@ function renderState(s) {
     ? "–" : Math.round(s.solar_input_watts));
   num("#usb", Math.round((s.usb_output_watts ?? 0) + (s.usbc_output_watts ?? 0)));
   num("#runtime", fmtRuntime(s.runtime_seconds));
+  // Label the direction only when there is a figure to label. "chg -" asserts
+  // a charge that a full battery on mains is not doing.
   const charging = (s.status || "").startsWith("OL");
-  num("#remain", charging
-    ? `chg ${fmtMinutes(s.remain_charge_minutes)}`
-    : `dsg ${fmtMinutes(s.remain_discharge_minutes)}`);
+  const mins = charging ? s.remain_charge_minutes : s.remain_discharge_minutes;
+  const estimate = fmtMinutes(mins);
+  num("#remain", estimate === "–" ? "–" : `${charging ? "chg" : "dsg"} ${estimate}`);
   renderPorts(s);
   applyControlLock();
 }

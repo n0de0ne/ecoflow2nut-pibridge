@@ -527,6 +527,11 @@ class Daemon:
         self._latest_status = status
         self._latest_runtime = int(variables.get("battery.runtime", "0"))
         self._latest_update_monotonic = now
+        # Push to any open dashboard before touching the store: the browser is
+        # waiting on this, and a slow disk should not delay it. publish() never
+        # blocks -- a client that cannot keep up drops frames instead.
+        if self._web is not None and self._web.has_listeners:  # type: ignore[attr-defined]
+            self._web.publish(self._web_state())  # type: ignore[attr-defined]
         if self._store is not None:
             self._record_sample(state, status, self._latest_runtime)
         log.info(

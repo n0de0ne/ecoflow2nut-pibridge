@@ -5,7 +5,7 @@
 
 // Resolve against the document, never "/", so the UI works when a reverse proxy
 // mounts the bridge under a sub-path.
-const BASE = location.pathname.replace(/[^/]*$/, "");
+export const BASE = location.pathname.replace(/[^/]*$/, "");
 
 const TOKEN_KEY = "ecoflow_token";
 const THEME_KEY = "ecoflow_theme";
@@ -85,8 +85,11 @@ export const healthStore = createStore({ ok: true, reason: "" });
 // -- formatting ----------------------------------------------------------- //
 
 export function fmtMinutes(m) {
-  if (m == null) return "–";
-  if (m >= 6000) return "∞";
+  // 5999 is the device's "no estimate" sentinel, not a duration. The old bound
+  // of 6000 sat one minute above it, so it rendered as a plausible 99h 59m --
+  // which is what a full battery on mains reports for time-to-charge. And a
+  // missing estimate is not an infinite one, so say nothing rather than "oo".
+  if (m == null || m >= 5999) return "–";
   const h = Math.floor(m / 60), mm = Math.round(m % 60);
   return h ? `${h}h ${mm}m` : `${mm}m`;
 }
