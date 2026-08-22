@@ -557,10 +557,15 @@ DC**, plus the auto-shutdown state and a live enable/disable. When the
 **Eve outlet** control appears (showing its last commanded on/off state), and a
 [SwitchBot](#server-power-button-switchbot) **Press** button if that's enabled.
 
-A coloured LED sits next to each control, each showing a true ON/OFF read from
-the device's own `flow_info_*` flag — **AC**, **USB** and **12V DC** alike. A
-port that is on but idle reads `ON · idle`; one that is drawing shows its watts,
-with USB summing all four ports (two USB-A, two USB-C). The **auto-shutdown**
+A coloured LED sits next to each control. **AC** and **12V DC** carry the
+device's own switch flag. **USB** does not — no model in the DELTA 2 generation
+publishes one — so its state is read off the draw instead: power leaving a port
+that can be switched off proves the switch is closed. Only a bank at zero watts
+is genuinely ambiguous (off, or on with nothing plugged in) and only that shows
+`?`; hovering says so. Toggling USB from the bridge also records what was
+commanded, since at zero draw nothing else ever would. A port that is on but
+idle reads `ON · idle`; one that is drawing shows its watts, with USB summing
+all six ports (two USB-A, two fast-charge USB-A, two USB-C). The **auto-shutdown**
 badge is grey
 *Disabled*, green *Monitoring*, pulsing amber *ARMED · cutting in Ns*, or pulsing
 red *CUT sent*. Turning the USB output off pops a confirmation, since the bridge

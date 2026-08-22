@@ -239,24 +239,33 @@ function renderReserve(a) {
 }
 
 function renderPorts(s) {
-  // Where a port has a decoded flow flag these are the device's own states,
-  // never inferences from power draw.
+  // The AC and 12V states are the device's own switch flags. USB has no such
+  // flag on the DELTA 2 generation, so the driver reads it off the draw --
+  // power leaving the port proves the switch is closed. Only zero draw is
+  // ambiguous, and only that shows as unknown.
   setPort("stAc", ...portState(s.ac_output_on, s.ac_output_watts,
     "The device has not reported an AC-output state."));
 
   const usbW = (s.usb_output_watts ?? 0) + (s.usbc_output_watts ?? 0);
   setPort("stUsb", ...portState(s.usb_output_on, usbW,
-    "The device has not reported a USB switch state. The On/Off buttons still work."));
+    "This model reports no USB switch flag, and nothing is drawing, so the " +
+    "bank could be off or on with nothing plugged in. Any draw above zero " +
+    "proves it is on. The On/Off buttons work either way."));
 
   setPort("stDc", ...portState(s.dc_output_on, s.dc_output_watts,
     "The device has not reported a 12V DC state."));
 
   el("#eveCtl").hidden = s.eve_enabled !== true;
   if (s.eve_enabled === true) {
+    // Read from the outlet, so its own button and its own app are reflected
+    // here too -- not just what this bridge last commanded.
     const on = s.eve_on;
+    const w = s.eve_watts;
+    const draw = w == null ? "" : ` · ${Math.round(w)}W`;
     setPort("stEve", on === true ? "on" : on === false ? "off" : "unknown",
-      on === true ? "ON" : on === false ? "OFF" : "?",
-      on == null ? "Unknown until first command." : "Last commanded state.");
+      on === true ? `ON${draw}` : on === false ? "OFF" : "?",
+      on == null ? "Not read yet — the first poll is still to come, or the "
+        + "outlet is unreachable." : "");
   }
   el("#sbCtl").hidden = s.switchbot_enabled !== true;
 }

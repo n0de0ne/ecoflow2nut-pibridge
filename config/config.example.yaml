@@ -209,6 +209,11 @@ eve:
   pairing_file: "/var/lib/ecoflow-nut/eve-pairing.json"
   setup_code: ""                # 8-digit HomeKit code, e.g. "123-45-678" (pairing only)
   connect_timeout_seconds: 30
+  # Read the outlet's real state this often. Without it the tile can only
+  # show what the bridge last commanded -- blank after a restart, wrong the
+  # moment you use the outlet's own button. Each poll is a short BLE
+  # connection, so raise it on a shared adapter; 0 turns polling off.
+  poll_interval_seconds: 60
 
 # Optional SwitchBot Bot (mechanical button pusher) for the server's power button.
 # DISABLED by default. Plain BLE, no pairing. MANUAL ONLY -- exposed on the CLI

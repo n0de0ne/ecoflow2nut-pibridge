@@ -317,3 +317,142 @@ async def test_watchdog_escalates_when_there_is_nothing_to_disconnect(
     with pytest.raises(SystemExit) as exc:
         await daemon._watchdog()
     assert exc.value.code == 70
+
+
+# ---------------------------------------------------------------------- #
+# Port state after a command
+# ---------------------------------------------------------------------- #
+
+
+class _SendingClient:
+    """Accepts command packets and records them."""
+
+    is_connected = True
+
+    def __init__(self) -> None:
+        self.sent: list[object] = []
+
+    async def send_command_packet(self, packet: object) -> None:
+        self.sent.append(packet)
+
+
+async def test_switching_usb_off_clears_the_inferred_on_state(tmp_path: Path) -> None:
+    """USB has no switch flag on this generation, so nothing else would.
+
+    The driver reads USB as ON from a live draw. Switch the bank off and the
+    draw goes to zero -- which is exactly the reading that proves nothing, so
+    the ON would stand forever. The command is the missing evidence.
+    """
+    from ecoflow_nut.state import DeviceState
+
+    daemon = _daemon(tmp_path)
+    daemon._active_client = _SendingClient()  # type: ignore[assignment]
+    daemon._latest_state = DeviceState(usb_output_on=True, usb_output_watts=1.0)
+
+    await daemon.control_output("usb", False)
+
+    assert daemon._latest_state.usb_output_on is False
+
+
+async def test_a_command_with_no_telemetry_yet_does_not_crash(tmp_path: Path) -> None:
+    """Controls are reachable before the first heartbeat lands."""
+    daemon = _daemon(tmp_path)
+    daemon._active_client = _SendingClient()  # type: ignore[assignment]
+    assert daemon._latest_state is None
+
+    await daemon.control_output("ac", True)  # must not raise
+
+
+async def test_the_eve_tile_reflects_a_read_not_the_last_command(
+    tmp_path: Path,
+) -> None:
+    """The outlet has its own button and its own app.
+
+    A bridge that only remembers what it commanded shows "?" after every
+    restart, and shows the wrong thing the moment anyone else touches it.
+    """
+    daemon = _daemon(tmp_path)
+    daemon._config.eve.poll_interval_seconds = 3600
+
+    class _Outlet:
+        async def read(self) -> EveReading:
+            return EveReading(on=True, watts=121.7)
+
+    daemon._eve = _Outlet()  # type: ignore[assignment]
+    assert daemon._web_state()["eve_on"] is None
+
+    task = asyncio.create_task(daemon._eve_poll())
+    for _ in range(100):
+        await asyncio.sleep(0)
+        if daemon._eve_state is not None:
+            break
+    daemon._stop.set()
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert daemon._web_state()["eve_on"] is True
+    assert daemon._web_state()["eve_watts"] == pytest.approx(121.7)
+
+
+async def test_an_unreachable_outlet_keeps_the_last_known_state(
+    tmp_path: Path,
+) -> None:
+    """A missed poll means we did not look, not that the outlet has no state.
+
+    Blanking the tile on a single failed read would make a flaky link look
+    like a flaky outlet, and would throw away the answer we already had.
+    """
+    daemon = _daemon(tmp_path)
+    daemon._config.eve.poll_interval_seconds = 3600
+    daemon._eve_state = True
+    daemon._eve_watts = 121.7
+
+    class _DeadOutlet:
+        async def read(self) -> EveReading:
+            raise OSError("le-connection-abort-by-local")
+
+    daemon._eve = _DeadOutlet()  # type: ignore[assignment]
+
+    task = asyncio.create_task(daemon._eve_poll())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    daemon._stop.set()
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert daemon._eve_state is True
+    assert daemon._eve_watts == pytest.approx(121.7)
+
+
+async def test_the_poll_stands_aside_for_an_auto_shutdown_confirmation(
+    tmp_path: Path,
+) -> None:
+    """That loop holds the outlet's BLE lock, possibly indefinitely.
+
+    Queueing a poll behind it achieves nothing and parks a task on a lock with
+    no bounded wait.
+    """
+    daemon = _daemon(tmp_path)
+    daemon._config.eve.poll_interval_seconds = 3600
+    reads = 0
+
+    class _Outlet:
+        async def read(self) -> EveReading:
+            nonlocal reads
+            reads += 1
+            return EveReading(on=True, watts=5.0)
+
+    daemon._eve = _Outlet()  # type: ignore[assignment]
+    daemon._eve_confirm = object()  # type: ignore[assignment]
+
+    task = asyncio.create_task(daemon._eve_poll())
+    for _ in range(20):
+        await asyncio.sleep(0)
+    daemon._stop.set()
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert reads == 0

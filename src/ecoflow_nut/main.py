@@ -100,9 +100,13 @@ class Daemon:
         self._eve: EveOutlet | None = (
             EveOutlet(config.eve) if config.eve.enabled else None
         )
-        # Last on/off state we commanded the Eve outlet into (the outlet is not
-        # polled to avoid extra BLE traffic; None == unknown until first command).
+        # The Eve outlet's on/off state and draw. Seeded from what we commanded
+        # and then corrected by _eve_poll, because the outlet has its own button
+        # and its own app: a bridge that only remembers its own commands is
+        # blank after a restart and stale the moment anyone else touches it.
         self._eve_state: bool | None = None
+        self._eve_watts: float | None = None
+        self._eve_poll_task: asyncio.Task[None] | None = None
         # Set while a cut is holding for the Eve's load to go idle, so the UI can
         # say so rather than claiming "CUT sent" when nothing has been cut yet.
         self._eve_confirm: EveIdleConfirmer | None = None
@@ -145,6 +149,8 @@ class Daemon:
         control = await self._start_control_server()
         watchdog = asyncio.create_task(self._watchdog())
         pruner = asyncio.create_task(self._prune_loop())
+        if self._eve is not None and self._config.eve.poll_interval_seconds > 0:
+            self._eve_poll_task = asyncio.create_task(self._eve_poll())
         try:
             backoff = 1.0
             while not self._stop.is_set():
@@ -190,6 +196,8 @@ class Daemon:
         finally:
             watchdog.cancel()
             pruner.cancel()
+            if self._eve_poll_task is not None:
+                self._eve_poll_task.cancel()
             if control is not None:
                 control.close()
             self._remove_control_socket()
@@ -306,7 +314,11 @@ class Daemon:
             else None
         )
         eve = (
-            {"eve_enabled": True, "eve_on": self._eve_state}
+            {
+                "eve_enabled": True,
+                "eve_on": self._eve_state,
+                "eve_watts": self._eve_watts,
+            }
             if self._eve is not None
             else {}
         )
@@ -452,6 +464,13 @@ class Daemon:
             "eve_confirm_idle_watts": cfg.eve_confirm_idle_watts,
         }
 
+    # DeviceState flag each output kind reports, for the optimistic update below.
+    _OUTPUT_FLAGS = {
+        "ac": "ac_output_on",
+        "usb": "usb_output_on",
+        "dc": "dc_output_on",
+    }
+
     async def control_output(self, kind: str, enabled: bool) -> str:
         """Send an output toggle over the live BLE connection. Raises on failure."""
         if kind not in OUTPUT_KINDS:
@@ -460,6 +479,15 @@ class Daemon:
         if client is None or not client.is_connected:
             raise RuntimeError("not connected to device")
         await client.send_command_packet(self._driver.output_packet(kind, enabled))
+        # Record what we just commanded. AC and 12V both report a switch flag,
+        # so the next heartbeat overwrites this within a second or two and it
+        # only buys the UI an instant response. USB is the case that needs it:
+        # the DELTA 2 generation has no USB flag, the driver can only infer ON
+        # from a live draw, and without this a bank switched off here would go
+        # on reading ON until something else contradicted it -- which, at zero
+        # watts, nothing ever would.
+        if (flag := self._OUTPUT_FLAGS.get(kind)) and self._latest_state is not None:
+            setattr(self._latest_state, flag, enabled)
         log.info("control.command", output=kind, enabled=enabled)
         return f"{kind} {'on' if enabled else 'off'}"
 
@@ -475,8 +503,41 @@ class Daemon:
         await self._cancel_eve_confirm()
         await self._eve.set(enabled)
         self._eve_state = enabled
+        # Whatever it was drawing is no longer true of the state we just moved
+        # it into; the next poll fills it back in.
+        self._eve_watts = None
         log.info("control.eve", enabled=enabled)
         return f"eve {'on' if enabled else 'off'}"
+
+    async def _eve_poll(self) -> None:
+        """Keep the Eve tile honest by reading the outlet, not our own memory.
+
+        One connect/read/disconnect per pass, on the interval from config. Slow
+        by default: the outlet is a convenience, not telemetry, and on a shared
+        adapter every read costs EcoFlow airtime.
+
+        Two things it deliberately does not do. It does not poll while an
+        auto-shutdown confirmation is running -- that loop holds the outlet's
+        BLE lock and may hold it indefinitely, so a queued read would achieve
+        nothing but a stuck task. And a failed read leaves the last known state
+        alone rather than blanking it: a missed poll means we did not look, not
+        that the outlet stopped having a state.
+        """
+        interval = self._config.eve.poll_interval_seconds
+        if self._eve is None or interval <= 0:
+            return
+        while not self._stop.is_set():
+            if self._eve_confirm is None:
+                try:
+                    reading = await self._eve.read()
+                    self._eve_state = reading.on
+                    self._eve_watts = reading.watts
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - the outlet is optional
+                    log.warning("eve.poll_failed", error=str(exc))
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), timeout=interval)
 
     async def control_switchbot(self, action: str = "press") -> str:
         """Send a one-shot command to the SwitchBot Bot. Raises on failure."""

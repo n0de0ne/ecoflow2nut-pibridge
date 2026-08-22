@@ -195,6 +195,12 @@ class EveOutletConfig:
     # left empty once the outlet is paired.
     setup_code: str = ""
     connect_timeout_seconds: int = 30
+    # How often to read the outlet's real on/off state and draw. Without this
+    # the dashboard can only show the last state the *bridge* commanded, which
+    # is unknown after a restart and wrong the moment anyone uses the outlet's
+    # own button. Each poll is a connect/read/disconnect, so keep it slow on a
+    # shared adapter. 0 disables polling and restores the old behaviour.
+    poll_interval_seconds: int = 60
 
 
 @dataclass(slots=True)

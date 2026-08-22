@@ -452,7 +452,15 @@ def _merge_pd_ports(state: DeviceState, pd: dict[str, Any]) -> None:
 
     The 12V DC port is EcoFlow's "car" port throughout this protocol, so its
     switch and its draw arrive under those names.
+
+    There is no USB switch flag anywhere in this generation's PD heartbeat --
+    the AC and 12V ports each have one, USB simply does not -- so the state is
+    read off the draw instead. Power leaving a port that can be switched off
+    proves the switch is closed: that is an entailment, not a guess, and it is
+    the only claim made here. Zero draw stays unknown, because a disabled bank
+    and an enabled bank with nothing plugged in look identical.
     """
+    usb_watts: list[float] = []
     for field, attr in (
         ("usb1_watt", "usb_a1_watts"),
         ("usb2_watt", "usb_a2_watts"),
@@ -463,7 +471,10 @@ def _merge_pd_ports(state: DeviceState, pd: dict[str, Any]) -> None:
     ):
         if (v := pd.get(field)) is not None:
             setattr(state, attr, float(v))
+            usb_watts.append(float(v))
     state.recompute_usb_totals()
+    if any(w > 0 for w in usb_watts):
+        state.usb_output_on = True
 
     if (v := pd.get("car_watts")) is not None:
         state.dc_output_watts = float(v)

@@ -184,6 +184,45 @@ def test_a_partial_pd_frame_does_not_zero_an_unmentioned_usb_port():
     assert state.usbc_output_watts == pytest.approx(90)
 
 
+def test_a_usb_port_that_is_drawing_proves_the_bank_is_on():
+    """This generation sends no USB switch flag, so the draw stands in.
+
+    The dashboard used to render "? · 1W" -- a question mark next to proof of
+    the answer. Power leaving a port that can be switched off means the switch
+    is closed; nothing weaker is claimed here.
+    """
+    state = DeviceState()
+    payload = rawstruct.pack(delta2.PD_DELTA2_MAX, {"qc_usb1_watt": 1})
+    assert delta2.DELTA2_MAX.handle_packet(state, _frame(0x02, 0x02, payload))
+    assert state.usb_output_on is True
+
+
+def test_an_idle_usb_bank_stays_unknown():
+    """A disabled bank and an enabled bank with nothing plugged in both read
+    zero watts, and no flag separates them. Claiming either would be a guess."""
+    state = DeviceState()
+    payload = rawstruct.pack(
+        delta2.PD_DELTA2_MAX,
+        {"usb1_watt": 0, "usb2_watt": 0, "qc_usb1_watt": 0, "qc_usb2_watt": 0,
+         "typec1_watts": 0, "typec2_watts": 0},
+    )
+    assert delta2.DELTA2_MAX.handle_packet(state, _frame(0x02, 0x02, payload))
+    assert state.usb_output_on is None
+
+
+def test_an_idle_frame_does_not_retract_a_known_usb_state():
+    """Unplugging the last charger is not evidence the bank was switched off,
+    and a tile that flips ON -> ? on an idle frame reads as a fault."""
+    state = DeviceState()
+    drawing = rawstruct.pack(delta2.PD_DELTA2_MAX, {"typec1_watts": 30})
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x02, 0x02, drawing))
+    assert state.usb_output_on is True
+
+    idle = rawstruct.pack(delta2.PD_DELTA2_MAX, {"typec1_watts": 0})
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x02, 0x02, idle))
+    assert state.usb_output_on is True, "still on as far as anything here knows"
+
+
 def _index_of(layout, name: str) -> int:
     return next(i for i, (field, _) in enumerate(layout) if field == name)
 
