@@ -348,6 +348,92 @@ What to check:
    watts should match what the display shows. If they are plausible but wrong,
    an offset is off — compare the payload hex with the layout in `delta2.py`.
 
+## What else the DELTA 2 link carries
+
+The bridge keeps 25 values. The five heartbeats decode to about **180 named
+fields**, and on real hardware the frames are longer still than the layouts.
+This is an inventory of what is being thrown away, so "the bridge cannot see
+that" and "the bridge sees it and drops it" stop looking the same.
+
+| Heartbeat | On the wire (E2000) | Layout | Named fields | Kept |
+|---|---|---|---|---|
+| PD (`0x02`) | 137 B | 137 B | 61 | 11 |
+| EMS (`0x03/0x02`) | 55 B | 46 B | 23 | 4 |
+| BMS (`0x03/0x32`) | **192 B** | 69 B | 28 | 4 |
+| INV (`0x04`) | 72 B | 67 B | 32 | 5 |
+| MPPT (`0x05`) | 92 B | 84 B | 35 | 2 |
+
+Three separate categories, and they need different work:
+
+**1. Decoded and discarded.** Named in `delta2.py`, parsed on every frame, never
+merged into `DeviceState`. Nothing to reverse-engineer -- only plumbing.
+
+* **Thermal** — `bms.temp`, `bms.max_cell_temp` / `min_cell_temp`,
+  `bms.max_mos_temp`, `inv.out_temp`, `inv.dc_in_temp`, `mppt.mppt_temp`,
+  `pd.typec1_temp` / `typec2_temp`, `ems.fan_level`, `inv.fan_state`.
+  `battery.temperature` is a standard NUT variable, so pack temperature has a
+  place to go that every NUT client already understands.
+* **Pack health** — `bms.cycles`, `bms.soh`, `bms.design_cap` vs `full_cap`,
+  and `bms.max_cell_vol` − `min_cell_vol` (a widening spread is the early
+  warning for a cell going bad).
+* **Limits the unit is already enforcing** — `ems.max_charge_soc`,
+  `ems.min_dsg_soc`, `pd.bp_power_soc`, `inv.cfg_slow_chg_watts` /
+  `cfg_fast_chg_watts` / `ac_chg_rated_power`, `mppt.cfg_dc_chg_current`.
+  These answer "why does it stop at 90%" and "why is it only taking 200 W".
+* **Faults** — `pd.error_code`, `bms.err_code`, `bms.bms_fault`,
+  `mppt.fault_code`, `ems.bms_warning_state`. Only the inverter's
+  `err_code` is currently kept.
+* **Standby timers** — `pd.standby_min`, `inv.standby_mins`,
+  `mppt.car_standby_mins`. Why the unit switches itself off.
+* **Per-string PV detail** — the `pv2_*` block in `MPPT_MR350`. Both channels
+  are already summed into `solar_input_watts`, but their voltages, currents
+  and per-string charge states are dropped, so a shaded or disconnected
+  string is invisible.
+* **Settings mirrors** — `inv.cfg_ac_xboost`, `pd.pv_charge_prio_set`,
+  `pd.ac_auto_on_cfg_set`, `pd.lcd_brightness`, `pd.quiet_mode`, `pd.wifi_rssi`.
+* **Lifetime counters** — `pd.*_chg_power` / `*_dsg_power` and `pd.*_used_time`,
+  per port. Cumulative, not instantaneous: on this firmware `sun_chg_power`
+  reads 0 while PV is actively charging, so they are odometers at best.
+
+**2. Not decoded at all.** The BMS frame is the prize: **192 bytes on the wire
+against a 69-byte layout**, so 123 bytes have never been looked at. On this
+generation that region usually holds per-cell voltages and per-cell
+temperatures. EMS, INV and MPPT each have a shorter unmapped tail (9, 5 and
+8 bytes). `ecoflow-nut sniff` already reports these mismatches by name.
+
+**3. Writable, but unverified.** Only three commands are implemented: USB
+(`cmd_id 0x22` → PD), AC (`0x42`) and 12V DC (`0x51` → MPPT). The layouts show
+plenty more that is *settable* on the unit — charge limits, AC charge rate,
+X-Boost, standby timeouts, screen brightness, PV priority — and the AC opcode
+we already send carries six trailing `0xFF` "leave unchanged" bytes for the
+X-Boost / voltage / frequency settings, so at least those share an opcode that
+is known-good.
+
+**None of the other opcodes should be guessed.** A wrong `cmd_id` reaching a
+battery management system is not a wrong pixel: charge-current and charge-limit
+writes are the ones that matter, and there is no ack to tell you it went
+somewhere unintended. Capture the real opcode from the EcoFlow app first.
+
+### Confirming which of these are alive before wiring anything up
+
+Fields being *named* is not evidence they carry data. On this firmware
+`bms.input_watts` / `output_watts` and `pd.sun_chg_power` all read a constant 0
+while the pack was demonstrably charging from solar — which is why pack power
+is taken from `bms.vol` × `bms.amp` instead. Anything from the list above needs
+a live reading before it goes on a dashboard:
+
+```bash
+sudo systemctl stop ecoflow-nut-bridge          # the device allows one BLE link
+ecoflow-nut --config /etc/ecoflow-nut/config.yaml sniff --seconds 60 --out frames.jsonl
+```
+
+The console output flags every payload longer or shorter than its layout;
+`frames.jsonl` holds every decoded field of every frame, so a field that is
+constant-zero across a minute of real operation can be told apart from one that
+moves. Take the capture while something is actually happening — charging from
+solar, or a load on the AC output — since a dead field and an idle one look
+identical on a station doing nothing.
+
 ## Gaps / TODO
 
 1. **No hardware validation of either generation's write path.** Command packets
