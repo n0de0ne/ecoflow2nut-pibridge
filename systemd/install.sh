@@ -55,6 +55,10 @@ if ! "${APP_DIR}/.venv/bin/pip" install "${APP_DIR}[eve]"; then
     echo "    Everything else is fine; only 'ecoflow-nut eve ...' needs it."
 fi
 chown -R ecoflow:nut "${APP_DIR}"
+# Put the CLI on PATH. It lives in the venv, which is not on anyone's PATH, so
+# without this every documented 'ecoflow-nut ...' command -- including the ones
+# this script prints below -- fails with "command not found".
+ln -sf "${APP_DIR}/.venv/bin/ecoflow-nut" /usr/local/bin/ecoflow-nut
 
 echo "==> Installing NUT configuration into ${NUT_CONF_DIR}..."
 mkdir -p "${NUT_CONF_DIR}"
@@ -132,7 +136,8 @@ Optional web UI (control dashboard):
 Optional Eve outlet (cut ONE downstream load, not the whole AC bank):
   - Reset the outlet and remove it from Apple Home first: a HomeKit accessory
     pairs to a single controller, and this makes the bridge that controller.
-  - ecoflow-nut --config /etc/ecoflow-nut/config.yaml eve discover  # -> device_id
+  - sudo ecoflow-nut --config /etc/ecoflow-nut/config.yaml eve discover  # -> device_id
+    (sudo: the config and pairing files are not world-readable)
   - Put device_id + setup_code in the 'eve' section, then 'eve pair'.
   - Set 'eve.enabled: true' and restart; its tile appears on the dashboard.
   - eve.adapter defaults to hci1. A second BT dongle is strongly preferred --
