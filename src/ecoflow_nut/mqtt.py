@@ -108,6 +108,34 @@ SENSORS: tuple[dict[str, Any], ...] = (
     ),
     # Not a measurement: a string that changes state, so no state_class.
     _sensor("status", "UPS status", state_class=None, icon="mdi:power-plug"),
+    # Pack health. Temperature first: it is the one HA users set automations on.
+    _sensor(
+        "battery_temp_c", "Battery temperature", unit="°C", device_class="temperature"
+    ),
+    _sensor(
+        "inverter_temp_c", "Inverter temperature", unit="°C", device_class="temperature"
+    ),
+    # Cycles only ever climbs, so total_increasing lets HA chart it as a
+    # lifetime counter instead of a noisy measurement.
+    _sensor(
+        "battery_cycles",
+        "Battery cycles",
+        state_class="total_increasing",
+        icon="mdi:battery-sync",
+    ),
+    _sensor(
+        "battery_soh_percent",
+        "Battery health",
+        unit="%",
+        icon="mdi:battery-heart-variant",
+    ),
+    _sensor(
+        "cell_mv_spread",
+        "Cell voltage spread",
+        unit="mV",
+        device_class="voltage",
+        icon="mdi:battery-alert-variant-outline",
+    ),
 )
 
 BINARY_SENSORS: tuple[dict[str, Any], ...] = (
@@ -128,6 +156,12 @@ BINARY_SENSORS: tuple[dict[str, Any], ...] = (
         "name": "12V DC active",
         "component": "binary_sensor",
         "device_class": "power",
+    },
+    {
+        "key": "fan_on",
+        "name": "Fan running",
+        "component": "binary_sensor",
+        "device_class": "running",
     },
 )
 

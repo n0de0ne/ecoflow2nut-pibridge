@@ -292,7 +292,64 @@ function renderState(s) {
   renderBatteryMeter(s);
   renderFlow(s);
   renderPorts(s);
+  renderHealth(s);
   applyControlLock();
+}
+
+/**
+ * What the pack says about itself, for the models whose BMS reports it.
+ *
+ * Hidden outright rather than shown as a row of dashes when nothing is
+ * reported: a card of em-dashes reads as a broken card, and on a station whose
+ * BMS stays quiet there is nothing to fix.
+ */
+function renderHealth(s) {
+  const card = el("#healthCard");
+  const known = [
+    s.battery_temp_c, s.cell_mv_spread, s.battery_cycles, s.battery_full_mah,
+  ].some(v => v != null);
+  card.hidden = !known;
+  if (!known) return;
+
+  // The cell range alongside the pack figure: one hot cell in an otherwise
+  // cool pack is the thing worth seeing, and the average hides it.
+  const range = s.cell_temp_max_c != null && s.cell_temp_min_c != null
+    && s.cell_temp_max_c !== s.cell_temp_min_c
+    ? ` (cells ${Math.round(s.cell_temp_min_c)}–${Math.round(s.cell_temp_max_c)})`
+    : "";
+  el("#hTemp").textContent =
+    s.battery_temp_c == null ? "–" : `${Math.round(s.battery_temp_c)}°C${range}`;
+
+  el("#hSpread").textContent =
+    s.cell_mv_spread == null ? "–" : `${s.cell_mv_spread} mV`;
+  el("#hCycles").textContent = s.battery_cycles == null
+    ? "–"
+    : `${s.battery_cycles}${s.battery_soh_percent != null
+      ? ` · ${Math.round(s.battery_soh_percent)}% SoH` : ""}`;
+
+  // Measured fade, not the BMS's own SoH estimate -- they disagree, and this
+  // one is arithmetic on two numbers the pack reports.
+  el("#hCapacity").textContent =
+    s.battery_full_mah == null || !s.battery_design_mah
+      ? "–"
+      : `${Math.round(s.battery_full_mah / s.battery_design_mah * 100)}% of new`;
+
+  // The limits the station is enforcing on itself. Worth stating only when one
+  // of them is actually in force -- "charge to 100%" is not news.
+  const parts = [];
+  if (s.charge_limit_percent != null && s.charge_limit_percent < 100) {
+    parts.push(`charges to ${s.charge_limit_percent}%`);
+  }
+  if (s.discharge_limit_percent) {
+    parts.push(`stops discharging at ${s.discharge_limit_percent}%`);
+  }
+  if (s.ac_charge_watts) parts.push(`AC charge capped at ${s.ac_charge_watts} W`);
+  if (s.inverter_temp_c != null) {
+    parts.push(`inverter ${Math.round(s.inverter_temp_c)}°C`
+      + (s.fan_on === true ? ", fan on" : ""));
+  }
+  el("#hLimits").textContent = parts.length
+    ? `Set on the unit: ${parts.join(" · ")}.` : "";
 }
 
 function renderAuto(a) {

@@ -575,6 +575,19 @@ A **Solar input** tile and chart series show PV harvest on models that report it
 (the DELTA 2 generation); it reads `–` rather than `0` on models that do not, so
 "not reported" stays distinguishable from "reporting zero".
 
+A **Battery health** card appears on models whose BMS reports it (the DELTA 2
+generation): pack temperature with the hot/cold cell range beside it, the
+cell-voltage spread (which widens long before capacity or SoH move, and is the
+earliest warning a failing cell gives), charge cycles and SoH, and measured
+capacity against nameplate. Under it, any limit the station is enforcing on
+itself — a charge ceiling, a discharge floor, a capped AC charge rate — because
+without them that behaviour is indistinguishable from a fault. Pack temperature
+is also published as NUT's standard `battery.temperature`, so `upsc`, Unraid
+and Home Assistant pick it up with no configuration. Every field here was
+confirmed carrying live, cross-checked values on real hardware first; the same
+BMS publishes several that are permanently zero on this firmware, and those are
+deliberately left out (see [`docs/PROTOCOL.md`](docs/PROTOCOL.md)).
+
 **History** — a chart you can navigate. Scroll or pinch to zoom about the
 cursor, drag to pan, double-click or **Reset** to go back to the selected range.
 **Live** pins the right edge to now and un-pins as soon as you pan away. Zooming

@@ -76,6 +76,42 @@ class DeviceState:
     # by drivers that receive SoC from more than one subsystem.
     soc_source: str | None = None
 
+    # -- pack health -------------------------------------------------------- #
+    # Everything below is reported by the battery itself rather than derived,
+    # and every field here was confirmed carrying live, self-consistent values
+    # on real hardware before being surfaced -- the BMS also publishes several
+    # fields that are permanently zero on this firmware (see docs/PROTOCOL.md).
+    #
+    # Pack temperature in degrees Celsius. Maps to NUT's own
+    # ``battery.temperature``, so every NUT client already knows what to do
+    # with it.
+    battery_temp_c: float | None = None
+    # Hottest and coldest cell. The spread matters more than either number: a
+    # pack whose cells diverge in temperature is a pack with a problem.
+    cell_temp_max_c: float | None = None
+    cell_temp_min_c: float | None = None
+    # Highest and lowest cell voltage, in millivolts. Their difference is the
+    # earliest warning a failing cell gives -- it widens long before capacity
+    # or SoH move.
+    cell_mv_max: int | None = None
+    cell_mv_min: int | None = None
+    # Full charge/discharge cycles, and the BMS's own health estimate (%).
+    battery_cycles: int | None = None
+    battery_soh_percent: float | None = None
+    # Capacity the pack can hold now against its nameplate, both in mAh. The
+    # ratio is capacity fade, which is measured rather than estimated.
+    battery_full_mah: int | None = None
+    battery_design_mah: int | None = None
+    # Inverter heatsink temperature (deg C) and whether the fan is running.
+    inverter_temp_c: float | None = None
+    fan_on: bool | None = None
+    # Limits the station is enforcing on itself, as set in the EcoFlow app.
+    # These are why a station "will not charge past 90%" or "only draws 400 W",
+    # and without them that behaviour looks like a fault.
+    charge_limit_percent: int | None = None
+    discharge_limit_percent: int | None = None
+    ac_charge_watts: int | None = None
+
     @property
     def is_complete(self) -> bool:
         """True once the essential value (SoC) has been seen.

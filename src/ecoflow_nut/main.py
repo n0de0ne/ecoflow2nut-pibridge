@@ -377,6 +377,30 @@ class Daemon:
             "remain_charge_minutes": s.remain_charge_minutes,
             "remain_discharge_minutes": s.remain_discharge_minutes,
             "error_code": s.error_code,
+            # Pack health and the limits the station enforces on itself. All
+            # None on a model whose BMS stays quiet about them.
+            "battery_temp_c": s.battery_temp_c,
+            "cell_temp_max_c": s.cell_temp_max_c,
+            "cell_temp_min_c": s.cell_temp_min_c,
+            "cell_mv_max": s.cell_mv_max,
+            "cell_mv_min": s.cell_mv_min,
+            # The difference is the number worth watching -- it widens long
+            # before capacity or SoH move -- so derive it once here rather than
+            # in each of the dashboard, MQTT and anything else downstream.
+            "cell_mv_spread": (
+                s.cell_mv_max - s.cell_mv_min
+                if s.cell_mv_max is not None and s.cell_mv_min is not None
+                else None
+            ),
+            "battery_cycles": s.battery_cycles,
+            "battery_soh_percent": s.battery_soh_percent,
+            "battery_full_mah": s.battery_full_mah,
+            "battery_design_mah": s.battery_design_mah,
+            "inverter_temp_c": s.inverter_temp_c,
+            "fan_on": s.fan_on,
+            "charge_limit_percent": s.charge_limit_percent,
+            "discharge_limit_percent": s.discharge_limit_percent,
+            "ac_charge_watts": s.ac_charge_watts,
             "status": self._latest_status,
             "runtime_seconds": self._latest_runtime,
             "updated_seconds_ago": age,

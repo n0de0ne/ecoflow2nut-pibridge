@@ -506,6 +506,15 @@ def _merge_ems(state: DeviceState, ems: dict[str, Any]) -> None:
         state.remain_charge_minutes = _remain_minutes(v)
     if (v := ems.get("dsg_remain_time")) is not None:
         state.remain_discharge_minutes = _remain_minutes(v)
+    # The limits the station enforces on itself, set in the EcoFlow app. Read
+    # 100 and 0 on the capture, i.e. no limit in force -- which is exactly the
+    # case that has to look different from "charges to 90% and stops".
+    if (v := ems.get("max_charge_soc")) is not None:
+        state.charge_limit_percent = int(v)
+    if (v := ems.get("min_dsg_soc")) is not None:
+        state.discharge_limit_percent = int(v)
+    if (v := ems.get("fan_level")) is not None:
+        state.fan_on = int(v) > 0
 
 
 def _merge_bms(state: DeviceState, bms: dict[str, Any]) -> None:
@@ -538,6 +547,28 @@ def _merge_bms(state: DeviceState, bms: dict[str, Any]) -> None:
         if charge is not None or discharge is not None:
             state.battery_watts = float(charge or 0.0) - float(discharge or 0.0)
 
+    # Pack health. Every field here was confirmed live and self-consistent on
+    # an E2000: remain_cap/full_cap gave 89.9% against the 90.5% the device
+    # reported, full_cap/design_cap 98.2% at 1 cycle, and a 3 mV cell spread
+    # across a 16S pack whose cell voltages sum to the measured pack voltage.
+    for field, attr, scale in (
+        ("temp", "battery_temp_c", 1.0),
+        ("max_cell_temp", "cell_temp_max_c", 1.0),
+        ("min_cell_temp", "cell_temp_min_c", 1.0),
+        ("soh", "battery_soh_percent", 1.0),
+    ):
+        if (v := bms.get(field)) is not None:
+            setattr(state, attr, round(float(v) * scale, 1))
+    for field, attr in (
+        ("max_cell_vol", "cell_mv_max"),
+        ("min_cell_vol", "cell_mv_min"),
+        ("cycles", "battery_cycles"),
+        ("full_cap", "battery_full_mah"),
+        ("design_cap", "battery_design_mah"),
+    ):
+        if (v := bms.get(field)) is not None:
+            setattr(state, attr, int(v))
+
 
 def _merge_mppt(state: DeviceState, mppt: dict[str, Any]) -> None:
     """Sum the PV channels into ``solar_input_watts``.
@@ -566,6 +597,15 @@ def _merge_inv(state: DeviceState, inv: dict[str, Any]) -> None:
         state.ac_output_on = bool(v)
     if (v := inv.get("err_code")) is not None:
         state.error_code = int(v)
+    if (v := inv.get("out_temp")) is not None:
+        state.inverter_temp_c = round(float(v), 1)
+    if (v := inv.get("fan_state")) is not None:
+        state.fan_on = int(v) > 0
+    # What the unit will actually pull from the wall. cfg_slow_chg_watts is the
+    # user-set ceiling (400 W on the capture); ac_chg_rated_power is the
+    # hardware maximum (2400 W) and is not what it will do.
+    if (v := inv.get("cfg_slow_chg_watts")) is not None:
+        state.ac_charge_watts = int(v)
     # Voltages and currents are reported in milli-units.
     if (v := inv.get("ac_in_vol")) is not None:
         volts = round(float(v) / 1000.0, 1)

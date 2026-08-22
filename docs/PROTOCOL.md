@@ -414,6 +414,62 @@ battery management system is not a wrong pixel: charge-current and charge-limit
 writes are the ones that matter, and there is no ack to tell you it went
 somewhere unintended. Capture the real opcode from the EcoFlow app first.
 
+### Capture results — E2000, 2026-08-22, 415 frames over 60 s
+
+Taken on mains at 213 W pass-through with the pack idling (−8 mA) and no sun.
+Every figure below was cross-checked against another field in the same frame
+before anything was surfaced.
+
+**Alive, cross-checked, now wired up:**
+
+| Field | Reading | Checked against |
+|---|---|---|
+| `bms.temp` | 32 °C | cell range 30–32 °C |
+| `bms.max/min_cell_vol` | 3332 / 3329 mV | 16 × 3332 mV = 53.3 V vs 52.76 V measured — a 16S pack |
+| `bms.cycles`, `soh` | 1, 100% | consistent with a recently replaced pack |
+| `bms.full_cap` / `design_cap` | 39280 / 40000 mAh | 98.2% — measured fade, not the BMS's estimate |
+| `bms.remain_cap` / `full_cap` | 89.9% | device reports 90.5% |
+| `inv.out_temp` | 37 °C | `mppt_temp` 37, `dc_in_temp` 37 |
+| `inv.cfg_slow_chg_watts` | 400 W | `ac_chg_rated_power` 2400 W is the hardware limit, not the set one |
+| `ems.max_charge_soc` / `min_dsg_soc` | 100 / 0 | no limit in force |
+| `inv.inv_out_vol` × `inv_out_amp` | 227.8 V × 0.963 A = 219 W | reported 213 W |
+
+**Confirmed dead on this firmware — do not surface:**
+
+* `bms.input_watts`, `bms.output_watts`, `bms.remain_time` — all 0 while the
+  pack was measurably active. Pack power comes from `vol` × `amp` instead.
+* `pd.sun_chg_power` — 0 lifetime, while `pd.dc_chg_power` reads 2398 Wh on a
+  station that has definitely charged from solar. Solar charging appears to be
+  counted under `dc_chg_power`, since PV and the car input share one XT60.
+* `pd.wifi_rssi` — 0.
+
+**Read correctly, but the value is wrong:** `inv.inv_out_freq` and
+`inv.ac_in_freq` both report **60** on a 230 V / 50 Hz French supply. The
+fields either side of them (`inv_out_amp` before, `ac_in_vol` after) decode to
+values that check out, so the offsets are right and the firmware is simply
+reporting 60. NUT keeps publishing the configured `input.frequency` rather
+than this.
+
+**Also alive, not yet surfaced:** `pd.bp_power_soc` = 90 (backup reserve
+level), `pd.standby_min` = 120 and `mppt.car_standby_mins` = 720 (auto-off
+timers), `pd.quiet_mode` = 1, `inv.cfg_ac_xboost` = 1,
+`mppt.cfg_dc_chg_current` = 8000 mA (solar/DC charge cap),
+`ems.open_ups_flag` = 0 (the unit's own UPS/bypass mode), and the lifetime
+counters `pd.ac_chg_power` = 4642 Wh / `ac_dsg_power` = 4457 Wh with per-port
+`*_used_time`.
+
+**Both remaining-time estimates were the 5999 sentinel**, which is why the
+dashboard shows no charge or discharge estimate on an idle station. Not a bug:
+the device genuinely has no estimate when nothing is moving.
+
+**Frame census.** The most frequent frame on the link is not telemetry:
+`src=0x03 cmd_set=0x03 cmd_id=0x0e` fired 154 times of 415, and its payload is
+`0153 0002` followed by 79 zero bytes. That is `AllKitDetailData` — the
+expansion-battery report — sent at full rate with no expansion batteries
+attached. Two other frames remain unidentified: `0x03/0x20/0x58` (80 B, an
+ASCII `0`-filled serial field then several floats, sent once) and the
+`src=0x35` handshake chatter.
+
 ### Confirming which of these are alive before wiring anything up
 
 Fields being *named* is not evidence they carry data. On this firmware

@@ -116,6 +116,12 @@ def build_variables(state: DeviceState, nut: NutConfig) -> dict[str, str]:
         "output.voltage": str(static.output_voltage),
         "output.frequency": str(static.output_frequency),
     }
+    # Optional, and only when the pack actually reports it. battery.temperature
+    # is a standard NUT variable, so adding it here is all any NUT client needs
+    # -- upsc, Unraid and HA already understand it. Omitted rather than zeroed
+    # on a model whose BMS is silent: 0 degrees is a reading, not an absence.
+    if state.battery_temp_c is not None:
+        variables["battery.temperature"] = _fmt(state.battery_temp_c)
     return variables
 
 

@@ -223,6 +223,76 @@ def test_an_idle_frame_does_not_retract_a_known_usb_state():
     assert state.usb_output_on is True, "still on as far as anything here knows"
 
 
+def test_pack_health_is_read_from_the_bms():
+    """Values are the ones captured from an E2000, not invented.
+
+    Each was cross-checked against another field in the same frame before being
+    surfaced: remain_cap/full_cap gave 89.9% against the 90.5% the device
+    reported, and 16 cells at max_cell_vol sum to 53.3 V against a measured
+    52.76 V. Fields that decode but read a constant zero on this firmware
+    (input_watts, output_watts, remain_time) are deliberately not among them.
+    """
+    state = DeviceState()
+    payload = rawstruct.pack(
+        delta2.BMS_HEARTBEAT,
+        {
+            "temp": 32, "max_cell_temp": 32, "min_cell_temp": 30,
+            "max_cell_vol": 3332, "min_cell_vol": 3329,
+            "cycles": 1, "soh": 100,
+            "design_cap": 40000, "full_cap": 39280,
+        },
+    )
+    assert delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x32, payload))
+
+    assert state.battery_temp_c == pytest.approx(32)
+    assert state.cell_temp_max_c == pytest.approx(32)
+    assert state.cell_temp_min_c == pytest.approx(30)
+    assert state.cell_mv_max == 3332 and state.cell_mv_min == 3329
+    assert state.battery_cycles == 1
+    assert state.battery_soh_percent == pytest.approx(100)
+    assert state.battery_full_mah == 39280
+    assert state.battery_design_mah == 40000
+
+
+def test_the_self_imposed_limits_come_from_the_ems_and_inverter():
+    """Why a station "will not charge past 90%" or "only draws 400 W".
+
+    Without these the behaviour is indistinguishable from a fault, which is
+    the whole reason for surfacing them.
+    """
+    state = DeviceState()
+    ems = rawstruct.pack(
+        delta2.EMS_HEARTBEAT,
+        {"max_charge_soc": 90, "min_dsg_soc": 15, "fan_level": 0},
+    )
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x02, ems))
+    assert state.charge_limit_percent == 90
+    assert state.discharge_limit_percent == 15
+
+    inv = rawstruct.pack(
+        delta2.INV_DELTA,
+        {"cfg_slow_chg_watts": 400, "ac_chg_rated_power": 2400,
+         "out_temp": 37, "fan_state": 1},
+    )
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x04, 0x02, inv))
+    assert state.ac_charge_watts == 400, (
+        "the ceiling that is set, not the 2400 W the hardware could do"
+    )
+    assert state.inverter_temp_c == pytest.approx(37)
+    assert state.fan_on is True
+
+
+def test_a_pack_that_reports_no_health_leaves_it_unknown():
+    """A model whose BMS stays quiet must not read as 0 degrees at 0% health."""
+    state = DeviceState()
+    payload = rawstruct.pack(delta2.BMS_HEARTBEAT, {"soc": 50})
+    short = payload[: rawstruct.size_of(delta2.BMS_HEARTBEAT[:6])]
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x32, short))
+    assert state.battery_temp_c is None
+    assert state.battery_cycles is None
+    assert state.battery_soh_percent is None
+
+
 def _index_of(layout, name: str) -> int:
     return next(i for i, (field, _) in enumerate(layout) if field == name)
 

@@ -145,3 +145,16 @@ def test_writer_writes_atomically(tmp_path, nut):
     # No leftover temp files in the directory.
     leftovers = [p for p in (tmp_path / "sub").iterdir() if p.name != "ecoflow.dev"]
     assert leftovers == []
+
+
+def test_battery_temperature_is_published_when_the_pack_reports_it(nut):
+    """`battery.temperature` is a standard NUT variable, so nothing downstream
+    needs teaching -- upsc, Unraid and HA all already read it."""
+    state = DeviceState(soc_percent=90, ac_input_present=True, battery_temp_c=32.0)
+    assert build_variables(state, nut)["battery.temperature"] == "32"
+
+
+def test_a_silent_pack_omits_the_temperature_rather_than_reporting_zero(nut):
+    """0 degrees is a reading. A model whose BMS says nothing has not taken it."""
+    state = DeviceState(soc_percent=90, ac_input_present=True)
+    assert "battery.temperature" not in build_variables(state, nut)
