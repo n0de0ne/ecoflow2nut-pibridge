@@ -272,6 +272,13 @@ class Daemon:
         # polling off the device's cadence rather than guessing.
         common = {
             "server_time": time.time(),
+            # How often a new reading actually appears. This is the number the
+            # UI must pace itself against: poll_interval_seconds below is the
+            # BLE *link watchdog* tick and says nothing about telemetry rate, so
+            # pacing off it showed 2-second-old data on a 5-second refresh --
+            # and would have looked outright dead to anyone who set the
+            # watchdog to the minute-scale value its name invites.
+            "publish_interval_seconds": self._config.nut.min_write_interval_seconds,
             "poll_interval_seconds": self._config.ecoflow.poll_interval_seconds,
             # The bridge drives several models, so the UI names the configured
             # one rather than hardcoding a device the user may not own.

@@ -438,3 +438,30 @@ async def test_require_auth_for_read_blocks_unauthenticated(harness: _Harness) -
         assert ok.status == 200
     finally:
         await client.close()
+
+
+def test_state_reports_how_often_it_publishes(tmp_path):
+    """The UI paces itself off this, so it has to be the telemetry cadence.
+
+    poll_interval_seconds is the BLE *link watchdog* tick and says nothing about
+    how often a reading appears. Pacing the dashboard off it showed 2-second-old
+    data on a 5-second refresh -- and anyone who set the watchdog to the
+    minute-scale value its name invites would have had a dashboard that looked
+    dead while the bridge was publishing 30 times a minute.
+    """
+    from ecoflow_nut.config import Config, EcoflowConfig
+    from ecoflow_nut.main import Daemon
+
+    config = Config(
+        ecoflow=EcoflowConfig(
+            mac="DC:06:75:A8:3E:29", serial="E201ZE1APH560861", model="e2000"
+        )
+    )
+    config.nut.dev_file_path = str(tmp_path / "ecoflow.dev")
+    config.settings_file = str(tmp_path / "settings.json")
+    config.ecoflow.poll_interval_seconds = 60  # a watchdog tick, not a data rate
+    config.nut.min_write_interval_seconds = 2.0
+
+    payload = Daemon(config)._web_state()
+    assert payload["publish_interval_seconds"] == 2.0
+    assert payload["poll_interval_seconds"] == 60, "still reported, just not paced on"

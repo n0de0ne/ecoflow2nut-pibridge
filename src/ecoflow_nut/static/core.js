@@ -138,13 +138,13 @@ export function applyTheme(theme) {
 
 // -- refresh preference --------------------------------------------------- //
 
-/** "auto" tracks the bridge's own poll interval; anything else is milliseconds. */
+/** "auto" tracks how often the bridge publishes; anything else is milliseconds. */
 export const getRefresh = () => localStorage.getItem(REFRESH_KEY) || "auto";
 export const setRefresh = v => localStorage.setItem(REFRESH_KEY, v);
 
-export function resolveRefreshMs(preference, pollIntervalSeconds) {
+export function resolveRefreshMs(preference, publishIntervalSeconds) {
   if (preference !== "auto") return Number(preference);
-  const base = (pollIntervalSeconds ?? 5) * 1000;
+  const base = (publishIntervalSeconds ?? 5) * 1000;
   return Math.min(Math.max(base, 1000), 10000);
 }
 

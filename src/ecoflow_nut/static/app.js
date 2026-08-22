@@ -78,7 +78,18 @@ let backoff = 1;
 let inFlight = false;
 
 function baseInterval() {
-  return resolveRefreshMs(getRefresh(), stateStore.get()?.poll_interval_seconds);
+  return resolveRefreshMs(getRefresh(), publishSeconds());
+}
+
+/** How often the bridge actually publishes a new reading.
+ *
+ * Falls back to poll_interval_seconds only for a server too old to send the
+ * real cadence -- that field is the BLE link watchdog tick, and pacing the UI
+ * off it is what made a live dashboard look stale.
+ */
+function publishSeconds() {
+  const s = stateStore.get();
+  return s?.publish_interval_seconds ?? s?.poll_interval_seconds;
 }
 
 async function tick() {
@@ -128,7 +139,7 @@ function renderFreshness() {
     return;
   }
   const age = s?.updated_seconds_ago;
-  const staleAfter = Math.max(15, (s?.poll_interval_seconds ?? 5) * 3);
+  const staleAfter = Math.max(15, (publishSeconds() ?? 5) * 3);
   if (age == null) {
     chip.classList.add("warn");
     text.textContent = "awaiting device";
