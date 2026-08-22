@@ -726,7 +726,7 @@ class EcoFlowBLE:
     async def _request(self, data: bytes, timeout: float = 10.0) -> bytes:
         """Write a command frame and await a single notification response."""
         assert self._client is not None and self._notify_uuid is not None
-        future: asyncio.Future[bytes] = asyncio.get_event_loop().create_future()
+        future: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
 
         def _cb(_char: BleakGATTCharacteristic, value: bytearray) -> None:
             if not future.done():
@@ -822,9 +822,25 @@ class EcoFlowBLE:
                 ac_in=self.state.ac_input_watts,
                 ac_out=self.state.ac_output_watts,
             )
-            self._last_read_monotonic = asyncio.get_event_loop().time()
+            # time.monotonic(), not the loop clock: asyncio.get_event_loop()
+            # raises outside a running loop, and this must agree with the
+            # daemon's watchdog and _connected_monotonic, which both use it.
+            self._last_read_monotonic = time.monotonic()
             if self._on_state is not None:
-                self._on_state(self.state)
+                try:
+                    self._on_state(self.state)
+                except Exception as exc:  # noqa: BLE001
+                    # This runs inside bleak's notification callback, so an
+                    # exception escapes into the BLE transport and can take the
+                    # telemetry stream down with it. Nothing downstream -- the
+                    # NUT writer, the dashboard, the telemetry store -- is worth
+                    # that. A persistent failure is not hidden: no writes means
+                    # the daemon's watchdog trips on schedule.
+                    log.error(
+                        "ble.state_callback_failed",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
             if self.ack_frames:
                 # Keep a strong reference: a bare create_task may be garbage-
                 # collected while it is still running, and its exception then

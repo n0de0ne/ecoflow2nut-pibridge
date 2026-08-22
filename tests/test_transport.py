@@ -534,3 +534,33 @@ def test_connection_nodes_are_not_mistaken_for_adapters(monkeypatch, tmp_path):
     monkeypatch.setattr(eve_outlet, "Path", lambda _p: tmp_path)
 
     assert eve_outlet.available_adapters() == ["hci0", "hci1"]
+
+
+def test_a_broken_state_consumer_cannot_stop_telemetry():
+    """_on_state runs inside bleak's notification callback.
+
+    An exception there escapes into the BLE transport and can take the whole
+    telemetry stream down -- so a failing NUT write, dashboard push or telemetry
+    store must not be able to reach it. A persistent failure still surfaces:
+    no writes means the daemon's watchdog trips on schedule.
+    """
+    from ecoflow_nut.ble_client import EcoFlowBLE
+    from ecoflow_nut.config import BleConfig, EcoflowConfig
+
+    calls: list[object] = []
+
+    def _explode(state):
+        calls.append(state)
+        raise RuntimeError("dashboard fell over")
+
+    client = EcoFlowBLE(
+        EcoflowConfig(mac="DE:AD:BE:EF:00:01", serial="E201X", model="e2000"),
+        BleConfig(),
+        on_state=_explode,
+    )
+    client._handle_payload(_frame(2, b"\x00" * 60))  # must not raise
+    assert calls, "the consumer was called"
+
+    # And the next frame still gets through, rather than the stream being dead.
+    client._handle_payload(_frame(2, b"\x01" * 60))
+    assert len(calls) == 2
