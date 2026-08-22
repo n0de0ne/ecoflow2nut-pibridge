@@ -155,83 +155,229 @@ def _client_for_dedupe_test():
     )
 
 
-async def test_connect_falls_back_to_the_address_when_nothing_advertises(monkeypatch):
-    """A scan is not proof of absence, so a silent scan must not end the attempt.
 
-    BlueZ does not drop connections when the process that made them exits or is
-    killed (bluez/bluez#89), and a station it still holds does not advertise.
-    That leaves the device invisible to every scanner on the host -- recoverable
-    only by a human running `bluetoothctl disconnect`, which is not something an
-    unattended bridge can rely on.
+def test_bluez_device_path_matches_bluetoothctl():
+    """The path BlueZ exposes a device at, which is what Disconnect targets."""
+    from ecoflow_nut.ble_client import bluez_device_path
+
+    assert (
+        bluez_device_path("dc:06:75:a8:3e:29", "hci0")
+        == "/org/bluez/hci0/dev_DC_06_75_A8_3E_29"
+    )
+    # An unset adapter still has to produce a usable path.
+    assert bluez_device_path("DC:06:75:A8:3E:29", "").endswith("dev_DC_06_75_A8_3E_29")
+
+
+async def test_a_silent_scan_takes_down_a_stale_link_and_rescans(monkeypatch):
+    """BlueZ holds connections past the death of the process that made them.
+
+    An EcoFlow serves one client at a time, so while BlueZ believes it still has
+    one the station stops advertising and no scanner on the host can see it.
+    Scanning again cannot help -- the link has to be dropped first, which is all
+    `bluetoothctl disconnect` does and is exactly what a human had to keep
+    doing by hand.
     """
+    from ecoflow_nut import ble_client
+
     client = _client_for_dedupe_test()
-    handshakes: list[str] = []
-
-    async def _no_device(_mac: str):
-        return None, None
-
-    async def _establish(target):
-        handshakes.append(target)
-        return _FakeBleakClient()
-
-    monkeypatch.setattr(client, "_find_device", _no_device)
-    monkeypatch.setattr(client, "_establish", _establish)
-    monkeypatch.setattr(client, "_resolve_characteristics", lambda: None)
-    monkeypatch.setattr(client, "_handshake", _noop_handshake)
-
-    await client.connect()
-    assert handshakes == ["DE:AD:BE:EF:00:01"], "connected by address, not abandoned"
-    # No advertisement to read a capability byte from; 7 covers every current unit.
-    assert client._encrypt_type == 7
-
-
-async def test_connect_prefers_a_scanned_device_when_there_is_one(monkeypatch):
-    """The normal path is unchanged: a real advert still wins."""
-    client = _client_for_dedupe_test()
-    seen: list[object] = []
+    scans: list[str] = []
+    cleared: list[tuple[str, str]] = []
     device = object()
 
-    async def _found(_mac: str):
-        return device, None
+    async def _find(mac: str):
+        scans.append(mac)
+        # Invisible until the stale link is dropped, then it advertises again.
+        return (device, None) if cleared else (None, None)
 
-    async def _establish(target):
-        seen.append(target)
-        return _FakeBleakClient()
+    async def _clear(mac: str, adapter: str) -> bool:
+        cleared.append((mac, adapter))
+        return True
 
-    monkeypatch.setattr(client, "_find_device", _found)
-    monkeypatch.setattr(client, "_establish", _establish)
+    monkeypatch.setattr(client, "_find_device", _find)
+    monkeypatch.setattr(ble_client, "clear_stale_connection", _clear)
+    monkeypatch.setattr(client, "_establish", _fake_establish)
     monkeypatch.setattr(client, "_resolve_characteristics", lambda: None)
     monkeypatch.setattr(client, "_handshake", _noop_handshake)
 
     await client.connect()
-    assert seen == [device]
+    assert cleared == [("DE:AD:BE:EF:00:01", "hci0")]
+    assert len(scans) == 2, "rescan once the device can advertise again"
 
 
-async def test_connecting_by_address_reports_why_it_failed(monkeypatch):
-    """A genuinely absent device must still produce a legible error."""
+async def test_nothing_to_clear_still_reports_the_scan_failure(monkeypatch):
+    """A device that is genuinely absent must fail, not retry forever."""
+    from ecoflow_nut import ble_client
     from ecoflow_nut.ble_client import BleakConnectionError
 
     client = _client_for_dedupe_test()
 
-    def _plain(_target):
-        return _FakeBleakClient(fail="le-connection-abort-by-local")
+    async def _find(_mac: str):
+        return None, None
 
-    monkeypatch.setattr(client, "_plain_client", _plain)
+    async def _clear(_mac: str, _adapter: str) -> bool:
+        return False
 
-    with pytest.raises(BleakConnectionError) as exc:
-        await client._establish("DE:AD:BE:EF:00:01")
-    assert "did not advertise" in str(exc.value)
-    assert "le-connection-abort-by-local" in str(exc.value), "keep the real cause"
+    monkeypatch.setattr(client, "_find_device", _find)
+    monkeypatch.setattr(ble_client, "clear_stale_connection", _clear)
+
+    with pytest.raises(BleakConnectionError, match="not found during scan"):
+        await client.connect()
+
+
+async def test_a_healthy_scan_never_touches_the_link(monkeypatch):
+    """Clearing is for the stuck case only; it must not disturb a live one."""
+    from ecoflow_nut import ble_client
+
+    client = _client_for_dedupe_test()
+    device = object()
+
+    async def _find(_mac: str):
+        return device, None
+
+    async def _clear(_mac: str, _adapter: str) -> bool:  # pragma: no cover
+        raise AssertionError("must not disconnect a device that is advertising")
+
+    monkeypatch.setattr(client, "_find_device", _find)
+    monkeypatch.setattr(ble_client, "clear_stale_connection", _clear)
+    monkeypatch.setattr(client, "_establish", _fake_establish)
+    monkeypatch.setattr(client, "_resolve_characteristics", lambda: None)
+    monkeypatch.setattr(client, "_handshake", _noop_handshake)
+
+    await client.connect()
+
+
+def test_a_drop_reports_how_long_the_link_lasted():
+    """Dropping every 30s and dropping once a day need different fixes."""
+    import time as _time
+
+    client = _client_for_dedupe_test()
+    client._connected_monotonic = _time.monotonic() - 42
+    events: list[dict] = []
+
+    class _Log:
+        def warning(self, event: str, **kw) -> None:
+            events.append({"event": event, **kw})
+
+    client_log = _Log()
+    import ecoflow_nut.ble_client as mod
+
+    original, mod.log = mod.log, client_log
+    try:
+        client._on_disconnect(None)
+    finally:
+        mod.log = original
+
+    assert events[0]["event"] == "ble.disconnected"
+    assert events[0]["link_seconds"] == pytest.approx(42, abs=1)
 
 
 async def _noop_handshake() -> None:
     return None
 
 
-class _FakeBleakClient:
-    def __init__(self, fail: str | None = None) -> None:
-        self._fail = fail
+async def _fake_establish(_device):
+    return _FakeBleakClient()
 
+
+class _FakeBleakClient:
     async def connect(self) -> None:
-        if self._fail is not None:
-            raise OSError(self._fail)
+        return None
+
+
+class _FakeBus:
+    """Stands in for the system bus: records calls, replies as told."""
+
+    def __init__(self, connected=None, disconnect_ok: bool = True) -> None:
+        self._connected = connected
+        self._disconnect_ok = disconnect_ok
+        self.calls: list[str] = []
+        self.closed = False
+
+    async def connect(self):
+        return self
+
+    def disconnect(self) -> None:
+        self.closed = True
+
+    async def call(self, message):
+        from dbus_fast import Message, Variant
+
+        self.calls.append(message.member)
+        message.serial = message.serial or 1  # a real bus stamps this on send
+        if message.member == "Get":
+            if self._connected is None:
+                return _error_reply(message, "org.freedesktop.DBus.Error.UnknownObject")
+            return Message.new_method_return(
+                message, signature="v", body=[Variant("b", self._connected)]
+            )
+        if self._disconnect_ok:
+            return Message.new_method_return(message)
+        return _error_reply(message, "org.freedesktop.DBus.Error.AccessDenied")
+
+
+def _error_reply(request, name: str):
+    from dbus_fast import Message
+
+    request.serial = request.serial or 1
+    return Message.new_error(request, name, "denied")
+
+
+def _install_fake_bus(monkeypatch, bus: _FakeBus) -> None:
+    import dbus_fast.aio
+
+    monkeypatch.setattr(dbus_fast.aio, "MessageBus", lambda **_kw: bus)
+
+
+async def test_clearing_disconnects_a_link_bluez_is_holding(monkeypatch):
+    from ecoflow_nut.ble_client import clear_stale_connection
+
+    bus = _FakeBus(connected=True)
+    _install_fake_bus(monkeypatch, bus)
+
+    assert await clear_stale_connection("DC:06:75:A8:3E:29", "hci0") is True
+    assert bus.calls == ["Get", "Disconnect"]
+    assert bus.closed, "the bus must not be leaked on any path"
+
+
+async def test_clearing_leaves_a_device_bluez_is_not_holding_alone(monkeypatch):
+    """Then the scan found nothing for the ordinary reason: it is not there."""
+    from ecoflow_nut.ble_client import clear_stale_connection
+
+    bus = _FakeBus(connected=False)
+    _install_fake_bus(monkeypatch, bus)
+
+    assert await clear_stale_connection("DC:06:75:A8:3E:29", "hci0") is False
+    assert bus.calls == ["Get"], "never Disconnect what is not connected"
+
+
+async def test_clearing_a_device_bluez_has_never_seen_is_not_an_error(monkeypatch):
+    from ecoflow_nut.ble_client import clear_stale_connection
+
+    bus = _FakeBus(connected=None)
+    _install_fake_bus(monkeypatch, bus)
+
+    assert await clear_stale_connection("DC:06:75:A8:3E:29", "hci0") is False
+
+
+async def test_a_refused_disconnect_is_reported_not_raised(monkeypatch):
+    """Best-effort: a permission problem must degrade, not kill the reconnect."""
+    from ecoflow_nut.ble_client import clear_stale_connection
+
+    bus = _FakeBus(connected=True, disconnect_ok=False)
+    _install_fake_bus(monkeypatch, bus)
+
+    assert await clear_stale_connection("DC:06:75:A8:3E:29", "hci0") is False
+    assert bus.closed
+
+
+async def test_a_bus_that_will_not_connect_is_not_fatal(monkeypatch):
+    import dbus_fast.aio
+
+    from ecoflow_nut.ble_client import clear_stale_connection
+
+    class _Broken:
+        async def connect(self):
+            raise OSError("no system bus")
+
+    monkeypatch.setattr(dbus_fast.aio, "MessageBus", lambda **_kw: _Broken())
+    assert await clear_stale_connection("DC:06:75:A8:3E:29", "hci0") is False

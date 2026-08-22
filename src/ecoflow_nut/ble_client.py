@@ -305,6 +305,86 @@ def parse_encrypt_type(manufacturer_data: dict[int, bytes]) -> int | None:
     return None
 
 
+def bluez_device_path(mac: str, adapter: str) -> str:
+    """BlueZ's D-Bus object path for a device, e.g. /org/bluez/hci0/dev_AA_BB_..."""
+    return f"/org/bluez/{adapter or 'hci0'}/dev_{mac.upper().replace(':', '_')}"
+
+
+async def clear_stale_connection(mac: str, adapter: str) -> bool:
+    """Drop a connection BlueZ is holding to ``mac``. Returns True if it dropped one.
+
+    This is ``bluetoothctl disconnect <mac>``, over the same D-Bus interface
+    that command uses. It exists because BlueZ keeps connections alive after the
+    process that opened them dies, and an EcoFlow -- one BLE client at a time --
+    stops advertising while it believes it still has a client. Nothing on the
+    host can see the device again until that link is taken down.
+
+    Best-effort by design: every failure path returns False so the caller falls
+    back to reporting an ordinary "not found during scan".
+    """
+    try:
+        from dbus_fast import BusType, Message, MessageType
+        from dbus_fast.aio import MessageBus
+    except ImportError:  # pragma: no cover - dbus_fast ships with bleak on Linux
+        return False
+
+    path = bluez_device_path(mac, adapter)
+    bus = None
+    try:
+        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+
+        # Only claim to have cleared something if BlueZ really was connected;
+        # Disconnect succeeds either way, and a log line that cries wolf on
+        # every failed scan is worse than no log line.
+        connected = await bus.call(
+            Message(
+                destination="org.bluez",
+                path=path,
+                interface="org.freedesktop.DBus.Properties",
+                member="Get",
+                signature="ss",
+                body=["org.bluez.Device1", "Connected"],
+            )
+        )
+        if connected is None or connected.message_type is not MessageType.METHOD_RETURN:
+            # No such object: BlueZ has never seen this device, so the scan
+            # found nothing for the ordinary reason.
+            return False
+        if not connected.body[0].value:
+            return False
+
+        reply = await bus.call(
+            Message(
+                destination="org.bluez",
+                path=path,
+                interface="org.bluez.Device1",
+                member="Disconnect",
+            )
+        )
+        if reply is not None and reply.message_type is MessageType.METHOD_RETURN:
+            return True
+        log.warning(
+            "ble.stale_link_clear_failed",
+            mac=mac,
+            error=_dbus_error(reply),
+            note="is the service user in the 'bluetooth' group?",
+        )
+        return False
+    except Exception as exc:  # noqa: BLE001 - diagnosis only, never fatal
+        log.warning("ble.stale_link_clear_failed", mac=mac, error=str(exc))
+        return False
+    finally:
+        if bus is not None:
+            bus.disconnect()
+
+
+def _dbus_error(reply: object) -> str:
+    if reply is None:
+        return "no reply"
+    body = getattr(reply, "body", None) or []
+    return f"{getattr(reply, 'error_name', '?')}: {body[0] if body else ''}".strip()
+
+
 async def scan_devices(adapter: str | None, timeout: float) -> list[dict[str, object]]:
     """Scan for BLE devices, annotating the ones that look like EcoFlow units.
 
@@ -389,6 +469,11 @@ class EcoFlowBLE:
         self._encrypt_type = 0
         self._authenticated = asyncio.Event()
         self._last_read_monotonic: float = 0.0
+        # When the link came up, so a drop can report how long it lasted. An
+        # unstable link is diagnosed from that number -- dropping every 30s and
+        # dropping once a day have completely different causes -- and guessing
+        # at it from the gaps between log lines is no way to work.
+        self._connected_monotonic: float = 0.0
         # Last raw notification, to drop BlueZ's duplicate deliveries.
         self._last_notification: tuple[float, bytes] | None = None
         # Strong references to in-flight reply tasks (see _reply).
@@ -433,26 +518,28 @@ class EcoFlowBLE:
         log.info("ble.scanning", mac=mac, adapter=self._ble.adapter)
         device, adv = await self._find_device(mac)
 
-        # A scan is not proof of absence. A station that BlueZ still holds a
-        # connection to does not advertise, and BlueZ does not drop connections
-        # when the process that made them exits or is killed (bluez/bluez#89) --
-        # which is exactly the state a crash, an OOM kill or a `kill -9` leaves
+        # A silent scan is not proof of absence. A station that BlueZ still
+        # holds a connection to does not advertise, and BlueZ does not drop
+        # connections when the process that made them exits or is killed
+        # (bluez/bluez#89) -- the state any crash, OOM kill or `kill -9` leaves
         # behind. The device is then invisible to every scanner on the host, so
-        # scanning harder will never recover it; only `bluetoothctl disconnect`
-        # by hand would, and a bridge that needs a human to reconnect is not a
-        # bridge. Connect by address instead: BlueZ still knows the device, and
-        # bleak reuses the connection it is already holding.
-        target: BLEDevice | str = mac if device is None else device
+        # scanning again cannot help; the link has to be taken down first.
         if device is None:
-            log.warning("ble.not_advertising", mac=mac, note="connecting by address")
+            log.warning("ble.not_advertising", mac=mac)
+            if await clear_stale_connection(mac, self._ble.adapter):
+                log.warning("ble.stale_link_cleared", mac=mac, note="rescanning")
+                device, adv = await self._find_device(mac)
+        if device is None:
+            raise BleakConnectionError(f"device {mac} not found during scan")
 
         self._encrypt_type = await self._resolve_encrypt_type(adv)
         log.info("ble.found", mac=mac, encrypt_type=self._encrypt_type)
 
         self._authenticated.clear()
         log.debug("ble.connecting", mac=mac)
-        self._client = await self._establish(target)
-        log.info("ble.connected", mac=mac)
+        self._client = await self._establish(device)
+        self._connected_monotonic = time.monotonic()
+        log.info("ble.connected", mac=mac, rssi=getattr(adv, "rssi", None))
         self._resolve_characteristics()
         log.debug(
             "ble.characteristics",
@@ -463,49 +550,32 @@ class EcoFlowBLE:
         await self._handshake()
         log.info("ble.handshake_done")
 
-    async def _establish(self, target: BLEDevice | str) -> BleakClient:
+    async def _establish(self, device: BLEDevice) -> BleakClient:
         """Connect, preferring bleak-retry-connector to survive BlueZ's habit of
         accepting a connection and then immediately dropping it on first tries.
 
-        ``target`` is a scanned device, or a bare MAC when the device did not
-        advertise. The retry connector needs a scanned device, so the address
-        path uses bleak directly -- no loss, since a device we are reaching by
-        address is one BlueZ is already connected to, and the flakiness the
-        retry connector exists to paper over happens while *establishing* a
-        link, not while adopting one.
+        Always takes a scanned device. Handing bleak a bare address instead does
+        not avoid the scan -- its BlueZ backend just resolves the address with
+        ``find_device_by_address``, the same scan, one level down.
         """
-        if isinstance(target, str):
-            client = self._plain_client(target)
-            try:
-                await client.connect()
-            except Exception as exc:
-                raise BleakConnectionError(
-                    f"device {target} did not advertise and could not be reached "
-                    f"by address: {exc}"
-                ) from exc
-            return client
-
         try:
             from bleak_retry_connector import establish_connection
         except ImportError:
-            client = self._plain_client(target)
+            client = BleakClient(
+                device,
+                timeout=self._ble.connect_timeout_seconds,
+                disconnected_callback=self._on_disconnect,
+                bluez={"adapter": self._ble.adapter} if self._ble.adapter else {},
+            )
             await client.connect()
             return client
 
         return await establish_connection(
             BleakClient,
-            target,
-            target.name or self._ecoflow.mac,
+            device,
+            device.name or self._ecoflow.mac,
             disconnected_callback=self._on_disconnect,
             max_attempts=4,
-        )
-
-    def _plain_client(self, target: BLEDevice | str) -> BleakClient:
-        return BleakClient(
-            target,
-            timeout=self._ble.connect_timeout_seconds,
-            disconnected_callback=self._on_disconnect,
-            bluez={"adapter": self._ble.adapter} if self._ble.adapter else {},
         )
 
     async def _find_device(self, mac: str) -> tuple[BLEDevice | None, object]:
@@ -797,7 +867,13 @@ class EcoFlowBLE:
         await self._send_packet(packet)
 
     def _on_disconnect(self, _client: BleakClient) -> None:
-        log.warning("ble.disconnected")
+        held = (
+            round(time.monotonic() - self._connected_monotonic, 1)
+            if self._connected_monotonic
+            else None
+        )
+        log.warning("ble.disconnected", link_seconds=held)
+        self._connected_monotonic = 0.0
         self._authenticated.clear()
         self._cancel_replies()
 
