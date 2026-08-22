@@ -153,3 +153,85 @@ def _client_for_dedupe_test():
         EcoflowConfig(mac="DE:AD:BE:EF:00:01", serial="E201X", model="e2000"),
         BleConfig(),
     )
+
+
+async def test_connect_falls_back_to_the_address_when_nothing_advertises(monkeypatch):
+    """A scan is not proof of absence, so a silent scan must not end the attempt.
+
+    BlueZ does not drop connections when the process that made them exits or is
+    killed (bluez/bluez#89), and a station it still holds does not advertise.
+    That leaves the device invisible to every scanner on the host -- recoverable
+    only by a human running `bluetoothctl disconnect`, which is not something an
+    unattended bridge can rely on.
+    """
+    client = _client_for_dedupe_test()
+    handshakes: list[str] = []
+
+    async def _no_device(_mac: str):
+        return None, None
+
+    async def _establish(target):
+        handshakes.append(target)
+        return _FakeBleakClient()
+
+    monkeypatch.setattr(client, "_find_device", _no_device)
+    monkeypatch.setattr(client, "_establish", _establish)
+    monkeypatch.setattr(client, "_resolve_characteristics", lambda: None)
+    monkeypatch.setattr(client, "_handshake", _noop_handshake)
+
+    await client.connect()
+    assert handshakes == ["DE:AD:BE:EF:00:01"], "connected by address, not abandoned"
+    # No advertisement to read a capability byte from; 7 covers every current unit.
+    assert client._encrypt_type == 7
+
+
+async def test_connect_prefers_a_scanned_device_when_there_is_one(monkeypatch):
+    """The normal path is unchanged: a real advert still wins."""
+    client = _client_for_dedupe_test()
+    seen: list[object] = []
+    device = object()
+
+    async def _found(_mac: str):
+        return device, None
+
+    async def _establish(target):
+        seen.append(target)
+        return _FakeBleakClient()
+
+    monkeypatch.setattr(client, "_find_device", _found)
+    monkeypatch.setattr(client, "_establish", _establish)
+    monkeypatch.setattr(client, "_resolve_characteristics", lambda: None)
+    monkeypatch.setattr(client, "_handshake", _noop_handshake)
+
+    await client.connect()
+    assert seen == [device]
+
+
+async def test_connecting_by_address_reports_why_it_failed(monkeypatch):
+    """A genuinely absent device must still produce a legible error."""
+    from ecoflow_nut.ble_client import BleakConnectionError
+
+    client = _client_for_dedupe_test()
+
+    def _plain(_target):
+        return _FakeBleakClient(fail="le-connection-abort-by-local")
+
+    monkeypatch.setattr(client, "_plain_client", _plain)
+
+    with pytest.raises(BleakConnectionError) as exc:
+        await client._establish("DE:AD:BE:EF:00:01")
+    assert "did not advertise" in str(exc.value)
+    assert "le-connection-abort-by-local" in str(exc.value), "keep the real cause"
+
+
+async def _noop_handshake() -> None:
+    return None
+
+
+class _FakeBleakClient:
+    def __init__(self, fail: str | None = None) -> None:
+        self._fail = fail
+
+    async def connect(self) -> None:
+        if self._fail is not None:
+            raise OSError(self._fail)

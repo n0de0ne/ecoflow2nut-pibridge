@@ -412,32 +412,46 @@ class EcoFlowBLE:
     def is_connected(self) -> bool:
         return self._client is not None and self._client.is_connected
 
-    async def _resolve_encrypt_type(self, device: BLEDevice, adv) -> int:
+    async def _resolve_encrypt_type(self, adv) -> int:
         configured = self._ecoflow.encrypt_type
         if isinstance(configured, int):
             return configured
         if isinstance(configured, str) and configured.isdigit():
             return int(configured)
         # "auto": read from the advertisement, default to 7 (modern devices).
+        # There may be no advertisement at all -- see connect() -- in which case
+        # the default stands, which is right for every current EcoFlow. Pin
+        # ecoflow.encrypt_type in config for an older one.
         adv_type = parse_encrypt_type(getattr(adv, "manufacturer_data", {}) or {})
         if adv_type is not None:
             return adv_type
         return 7
 
     async def connect(self) -> None:
-        """Scan for the configured MAC, connect, and run the handshake."""
+        """Find the configured MAC, connect, and run the handshake."""
         mac = self._ecoflow.mac.upper()
         log.info("ble.scanning", mac=mac, adapter=self._ble.adapter)
         device, adv = await self._find_device(mac)
-        if device is None:
-            raise BleakConnectionError(f"device {mac} not found during scan")
 
-        self._encrypt_type = await self._resolve_encrypt_type(device, adv)
+        # A scan is not proof of absence. A station that BlueZ still holds a
+        # connection to does not advertise, and BlueZ does not drop connections
+        # when the process that made them exits or is killed (bluez/bluez#89) --
+        # which is exactly the state a crash, an OOM kill or a `kill -9` leaves
+        # behind. The device is then invisible to every scanner on the host, so
+        # scanning harder will never recover it; only `bluetoothctl disconnect`
+        # by hand would, and a bridge that needs a human to reconnect is not a
+        # bridge. Connect by address instead: BlueZ still knows the device, and
+        # bleak reuses the connection it is already holding.
+        target: BLEDevice | str = mac if device is None else device
+        if device is None:
+            log.warning("ble.not_advertising", mac=mac, note="connecting by address")
+
+        self._encrypt_type = await self._resolve_encrypt_type(adv)
         log.info("ble.found", mac=mac, encrypt_type=self._encrypt_type)
 
         self._authenticated.clear()
         log.debug("ble.connecting", mac=mac)
-        self._client = await self._establish(device)
+        self._client = await self._establish(target)
         log.info("ble.connected", mac=mac)
         self._resolve_characteristics()
         log.debug(
@@ -449,26 +463,49 @@ class EcoFlowBLE:
         await self._handshake()
         log.info("ble.handshake_done")
 
-    async def _establish(self, device: BLEDevice) -> BleakClient:
+    async def _establish(self, target: BLEDevice | str) -> BleakClient:
         """Connect, preferring bleak-retry-connector to survive BlueZ's habit of
-        accepting a connection and then immediately dropping it on first tries."""
+        accepting a connection and then immediately dropping it on first tries.
+
+        ``target`` is a scanned device, or a bare MAC when the device did not
+        advertise. The retry connector needs a scanned device, so the address
+        path uses bleak directly -- no loss, since a device we are reaching by
+        address is one BlueZ is already connected to, and the flakiness the
+        retry connector exists to paper over happens while *establishing* a
+        link, not while adopting one.
+        """
+        if isinstance(target, str):
+            client = self._plain_client(target)
+            try:
+                await client.connect()
+            except Exception as exc:
+                raise BleakConnectionError(
+                    f"device {target} did not advertise and could not be reached "
+                    f"by address: {exc}"
+                ) from exc
+            return client
+
         try:
             from bleak_retry_connector import establish_connection
         except ImportError:
-            client = BleakClient(
-                device,
-                timeout=self._ble.connect_timeout_seconds,
-                disconnected_callback=self._on_disconnect,
-            )
+            client = self._plain_client(target)
             await client.connect()
             return client
 
         return await establish_connection(
             BleakClient,
-            device,
-            device.name or self._ecoflow.mac,
+            target,
+            target.name or self._ecoflow.mac,
             disconnected_callback=self._on_disconnect,
             max_attempts=4,
+        )
+
+    def _plain_client(self, target: BLEDevice | str) -> BleakClient:
+        return BleakClient(
+            target,
+            timeout=self._ble.connect_timeout_seconds,
+            disconnected_callback=self._on_disconnect,
+            bluez={"adapter": self._ble.adapter} if self._ble.adapter else {},
         )
 
     async def _find_device(self, mac: str) -> tuple[BLEDevice | None, object]:
