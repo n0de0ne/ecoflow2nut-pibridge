@@ -407,3 +407,42 @@ async def test_mains_draw_is_still_billed(tmp_path: Path) -> None:
         assert money["total_cost"] > 0
     finally:
         await store.close()
+
+
+async def test_solar_reaches_the_savings_figure(tmp_path: Path) -> None:
+    """Harvest has to survive the round trip through the store to be worth anything.
+
+    The costing query gained a solar column; without this, a future edit could
+    drop it and the Energy page would quietly report zero saved forever, which
+    reads as "solar is not helping" rather than as a bug.
+    """
+    from ecoflow_nut.config import PricingConfig
+    from ecoflow_nut.pricing import compute_energy
+
+    store = await _store(tmp_path)
+    try:
+        state = DeviceState(
+            soc_percent=70.0,
+            ac_input_watts=0.0,
+            solar_input_watts=500.0,
+            ac_output_watts=500.0,
+        )
+        base = time.time() - 3600
+        for i in range(6):
+            await store.record("ecoflow", state, "OL", 3600)
+            store._conn.execute(  # type: ignore[union-attr]
+                "UPDATE ecoflow_samples SET ts = datetime(?, 'unixepoch') "
+                "WHERE rowid = (SELECT max(rowid) FROM ecoflow_samples)",
+                (base + i * 600,),
+            )
+        store._conn.commit()  # type: ignore[union-attr]
+
+        series = await store.energy_series("ecoflow", minutes=120, bucket_width=600)
+        assert all(row["solar_w"] == pytest.approx(500.0) for row in series)
+
+        money = compute_energy(series, 600, PricingConfig(enabled=True, price_hp=0.20))
+        assert money["total_cost"] == 0.0, "nothing was bought"
+        assert money["solar_savings"] > 0, "but the sun did the work"
+        assert money["net_saving"] == pytest.approx(money["load_cost"])
+    finally:
+        await store.close()

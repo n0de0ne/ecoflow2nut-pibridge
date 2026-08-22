@@ -255,7 +255,8 @@ class SqliteTelemetryStore:
         assert self._conn is not None
         sql = (
             "SELECT (CAST(strftime('%s', ts) AS INTEGER) / ?) * ? AS bucket, "
-            "avg(ac_input_watts) AS in_w, avg(ac_output_watts) AS out_w "
+            "avg(ac_input_watts) AS in_w, avg(ac_output_watts) AS out_w, "
+            "avg(solar_input_watts) AS solar_w "
             f"FROM {self._table} "
             "WHERE device = ? "
             "  AND ts >= datetime(?, 'unixepoch') "
@@ -270,6 +271,7 @@ class SqliteTelemetryStore:
                 "ts": datetime.fromtimestamp(int(r["bucket"]), tz=UTC).isoformat(),
                 "in_w": r["in_w"],
                 "out_w": r["out_w"],
+                "solar_w": r["solar_w"],
             }
             for r in rows
         ]

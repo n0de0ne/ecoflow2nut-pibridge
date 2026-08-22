@@ -195,6 +195,23 @@
         <div class="metric sm"><div class="label">Projected</div>
           <div class="value"><span id="eProj">–</span></div></div>
       </div>
+      <h2 class="sub">What it cost, what it saved</h2>
+      <div class="grid">
+        <div class="metric"><div class="label">Load cost (grid rates)</div>
+          <div class="value"><span id="eLoadCost">–</span></div>
+          <div class="hint">What the connected kit consumed, priced as if every
+            kWh came from the wall.</div></div>
+        <div class="metric"><div class="label">Net saving</div>
+          <div class="value"><span id="eNetSaving">–</span></div>
+          <div class="hint">Load cost minus what was actually bought — solar and
+            off-peak charging together.</div></div>
+        <div class="metric sm"><div class="label">Solar harvested</div>
+          <div class="value"><span id="eSolarKwh">–</span><span class="unit">kWh</span></div></div>
+        <div class="metric sm"><div class="label">Solar value</div>
+          <div class="value"><span id="eSolarSaving">–</span></div>
+          <div class="hint">Harvest at the tariff it displaced. Approximate:
+            PV charges the battery, so some is lost before it reaches the load.</div></div>
+      </div>
       <p id="energyNote" class="muted"></p>
     </div>
   </section>

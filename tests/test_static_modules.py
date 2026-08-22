@@ -83,3 +83,20 @@ def test_nothing_uses_a_sibling_export_it_forgot_to_import(module: Path) -> None
 
     missing = sorted((used & siblings) - imported - declared)
     assert not missing, f"{module.name} calls {missing} without importing them"
+
+
+@pytest.mark.parametrize("module", MODULES, ids=lambda p: p.name)
+def test_every_element_lookup_has_a_matching_id(module: Path) -> None:
+    """`el("#thing")` on an id that does not exist returns null, silently.
+
+    Nothing throws until something dereferences it, so a renamed or mistyped id
+    shows up as one dead tile on a page that otherwise works -- or, when the
+    caller does dereference it, as a TypeError that takes the whole render with
+    it. Neither is visible from the bridge.
+    """
+    ids = set(re.findall(r'id="([\w-]+)"', (STATIC / "index.html").read_text()))
+    referenced = set(re.findall(r'el\("#([\w-]+)"\)', module.read_text()))
+    missing = sorted(referenced - ids)
+    assert not missing, (
+        f"{module.name} looks up ids that index.html does not define: {missing}"
+    )

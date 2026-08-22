@@ -256,7 +256,8 @@ class TelemetryStore:
             SELECT
                 date_bin(make_interval(secs => $2), ts, 'epoch') AS bucket,
                 avg(ac_input_watts)::real AS in_w,
-                avg(ac_output_watts)::real AS out_w
+                avg(ac_output_watts)::real AS out_w,
+                avg(solar_input_watts)::real AS solar_w
             FROM {self._table}
             WHERE device = $1 AND ts >= to_timestamp($3) AND ts < to_timestamp($4)
             GROUP BY bucket
@@ -268,7 +269,12 @@ class TelemetryStore:
             end,
         )
         return [
-            {"ts": r["bucket"].isoformat(), "in_w": r["in_w"], "out_w": r["out_w"]}
+            {
+                "ts": r["bucket"].isoformat(),
+                "in_w": r["in_w"],
+                "out_w": r["out_w"],
+                "solar_w": r["solar_w"],
+            }
             for r in rows
         ]
 

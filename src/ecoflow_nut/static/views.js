@@ -433,9 +433,23 @@ export const energy = {
       el("#eProj").innerHTML = d.pricing_enabled
         ? `${fmtMoney(d.cost_per_day, cur)}/day · <b>${fmtMoney(d.cost_per_month, cur)}/mo</b>`
         : "—";
+      el("#eSolarKwh").textContent = (d.solar_kwh ?? 0).toFixed(2);
+      el("#eLoadCost").textContent =
+        d.pricing_enabled ? fmtMoney(d.load_cost, cur) : "—";
+      el("#eSolarSaving").textContent =
+        d.pricing_enabled ? fmtMoney(d.solar_savings, cur) : "—";
+      // A negative net saving is real and worth showing rather than clamping:
+      // it means the window bought more than it delivered, which is what
+      // charging the battery from the grid looks like.
+      const net = d.net_saving ?? 0;
+      el("#eNetSaving").textContent = d.pricing_enabled
+        ? (net < 0 ? `−${fmtMoney(-net, cur)}` : fmtMoney(net, cur)) : "—";
+
       el("#energyNote").textContent = d.pricing_enabled
         ? `Grid draw priced by HC window ${d.hc_window}. ` +
-          `Load delivered: ${(d.load_kwh ?? 0).toFixed(2)} kWh.`
+          `Load delivered: ${(d.load_kwh ?? 0).toFixed(2)} kWh. ` +
+          `Over a window shorter than a full charge cycle these figures are ` +
+          `skewed by the battery's own level moving; they settle over days.`
         : `Enable pricing in Settings to see cost. ` +
           `Load delivered: ${(d.load_kwh ?? 0).toFixed(2)} kWh.`;
     } catch (err) {

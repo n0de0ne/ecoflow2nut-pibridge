@@ -671,3 +671,12 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
   text-anchor: middle;
   dominant-baseline: middle;
 }
+
+/* Energy view: a short caveat under a figure that needs one. */
+.metric .hint {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.35;
+  margin-top: 4px;
+}
+h2.sub { margin-top: 20px; }

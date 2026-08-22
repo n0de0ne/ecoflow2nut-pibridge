@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from ecoflow_nut.config import PricingConfig
 from ecoflow_nut.pricing import compute_energy, is_off_peak
 
@@ -100,3 +102,73 @@ def test_both_backends_meter_cost_on_ac_input_only() -> None:
         assert "avg(input_watts)" not in source, (
             f"{backend} meters on total input, which bills solar as grid energy"
         )
+
+
+def _hourly(hours: int, **watts: float) -> list[dict[str, float | str]]:
+    """One bucket per hour at noon-ish, so every bucket lands in the HP window."""
+    return [
+        {"ts": f"2026-06-0{d + 1}T12:00:00+00:00", **watts} for d in range(hours)
+    ]
+
+
+def test_a_solar_run_costs_nothing_and_shows_what_it_saved() -> None:
+    """The question behind the feature: what did the servers cost, and what did
+    the sun cover?"""
+    pricing = PricingConfig(enabled=True, price_hp=0.20, price_hc=0.10)
+    # Two hours: 500 W of load, entirely covered by 500 W of PV, nothing bought.
+    series = _hourly(2, in_w=0.0, out_w=500.0, solar_w=500.0)
+
+    money = compute_energy(series, 3600, pricing)
+
+    assert money["grid_kwh"] == 0.0, "nothing came off the wall"
+    assert money["total_cost"] == 0.0, "so there is no bill"
+    assert money["load_kwh"] == pytest.approx(1.0), "the kit still used 1 kWh"
+    assert money["load_cost"] == pytest.approx(0.20), "which would have cost 20c"
+    assert money["solar_kwh"] == pytest.approx(1.0)
+    assert money["solar_savings"] == pytest.approx(0.20)
+    assert money["net_saving"] == pytest.approx(0.20), "the whole load cost was avoided"
+
+
+def test_running_purely_on_the_grid_saves_nothing() -> None:
+    """The control case: no solar, no battery movement, so cost == load cost."""
+    pricing = PricingConfig(enabled=True, price_hp=0.20, price_hc=0.10)
+    series = _hourly(2, in_w=500.0, out_w=500.0, solar_w=0.0)
+
+    money = compute_energy(series, 3600, pricing)
+
+    assert money["total_cost"] == pytest.approx(0.20)
+    assert money["load_cost"] == pytest.approx(0.20)
+    assert money["net_saving"] == pytest.approx(0.0)
+    assert money["solar_savings"] == 0.0
+
+
+def test_charging_the_battery_from_the_grid_shows_a_negative_saving() -> None:
+    """Buying more than you delivered is a real state, not a number to clamp.
+
+    Over a window shorter than a charge cycle this is what stashing cheap
+    off-peak energy looks like, and hiding it would make the figure a lie.
+    """
+    pricing = PricingConfig(enabled=True, price_hp=0.20, price_hc=0.10)
+    series = _hourly(2, in_w=1000.0, out_w=200.0, solar_w=0.0)
+
+    money = compute_energy(series, 3600, pricing)
+
+    assert money["grid_kwh"] == pytest.approx(2.0)
+    assert money["load_kwh"] == pytest.approx(0.4)
+    assert money["net_saving"] < 0
+    assert money["net_saving"] == pytest.approx(0.4 * 0.20 - 2.0 * 0.20)
+
+
+def test_each_bucket_is_valued_at_its_own_tariff() -> None:
+    """HC and HP differ, so a saving must be worth what it actually displaced."""
+    pricing = PricingConfig(
+        enabled=True, price_hp=0.20, price_hc=0.10, hc_start="22:00", hc_end="06:00"
+    )
+    series = [
+        {"ts": "2026-06-01T02:00:00+00:00", "in_w": 0.0, "out_w": 0.0, "solar_w": 1000.0},
+        {"ts": "2026-06-01T12:00:00+00:00", "in_w": 0.0, "out_w": 0.0, "solar_w": 1000.0},
+    ]
+    money = compute_energy(series, 3600, pricing)
+    assert money["solar_kwh"] == pytest.approx(2.0)
+    # One kWh displaced off-peak at 0.10, one on-peak at 0.20 -- not 2 x either.
+    assert money["solar_savings"] == pytest.approx(0.30)

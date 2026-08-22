@@ -5,6 +5,21 @@ store), integrate to energy (kWh) and split it across the off-peak (HC) and peak
 (HP) tariff windows by the *local* time-of-day of each bucket. Cost is metered
 against AC **input** (grid draw), per the user's configuration.
 
+Three money figures come out, and they answer different questions:
+
+* ``total_cost`` -- what was actually bought at the wall. The bill.
+* ``load_cost`` -- what the load consumed, valued at grid rates. "What my
+  servers cost to run", independent of where the energy came from.
+* ``net_saving`` -- ``load_cost - total_cost``. What not buying it all from
+  the grid was worth, capturing both solar and off-peak battery arbitrage.
+
+``solar_savings`` values the harvest alone at the tariff it displaced. It is
+an estimate, and slightly generous: PV arrives as DC into the battery, so
+some of it is lost to round-trip efficiency before it reaches the load, and
+energy stored in one tariff window may be spent in another. Over a window
+shorter than a full charge/discharge cycle, every figure here is distorted
+by the battery's own state moving -- they converge over days, not minutes.
+
 The HC window is a single span that may wrap midnight (e.g. 22:00 -> 06:00);
 every other minute of the day is HP.
 """
@@ -51,24 +66,33 @@ def compute_energy(
     hc_end = _parse_hhmm(pricing.hc_end)
     wh_per_bucket = bucket_seconds / 3600.0  # multiply by watts -> Wh
 
-    in_kwh = out_kwh = hc_kwh = hp_kwh = 0.0
+    in_kwh = out_kwh = solar_kwh = hc_kwh = hp_kwh = 0.0
     sum_in = peak_in = 0.0
+    # Valued at each bucket's own tariff, since both vary through the day.
+    load_cost = solar_savings = 0.0
     n = 0
     for item in series:
         in_w = float(item.get("in_w") or 0.0)
         out_w = float(item.get("out_w") or 0.0)
+        solar_w = float(item.get("solar_w") or 0.0)
         e_in = in_w * wh_per_bucket / 1000.0
         e_out = out_w * wh_per_bucket / 1000.0
+        e_solar = solar_w * wh_per_bucket / 1000.0
         in_kwh += e_in
         out_kwh += e_out
+        solar_kwh += e_solar
         sum_in += in_w
         peak_in = max(peak_in, in_w)
         n += 1
         minute = _local_minute_of_day(item.get("ts"))
-        if minute is not None and is_off_peak(minute, hc_start, hc_end):
+        off_peak = minute is not None and is_off_peak(minute, hc_start, hc_end)
+        rate = pricing.price_hc if off_peak else pricing.price_hp
+        if off_peak:
             hc_kwh += e_in
         else:
             hp_kwh += e_in
+        load_cost += e_out * rate
+        solar_savings += e_solar * rate
 
     hc_cost = hc_kwh * pricing.price_hc
     hp_cost = hp_kwh * pricing.price_hp
@@ -82,6 +106,17 @@ def compute_energy(
         "span_hours": round(span_hours, 2),
         "grid_kwh": round(in_kwh, 3),
         "load_kwh": round(out_kwh, 3),
+        "solar_kwh": round(solar_kwh, 3),
+        # What the load itself would cost buying every kWh from the grid --
+        # "what my servers cost to run" -- as opposed to total_cost, which is
+        # what was actually bought at the wall.
+        "load_cost": round(load_cost, 4),
+        # Harvested PV valued at the tariff it displaced.
+        "solar_savings": round(solar_savings, 4),
+        # The bottom line: running the load on grid alone, minus what was
+        # actually bought. Captures solar *and* off-peak battery arbitrage,
+        # which valuing the harvest alone does not.
+        "net_saving": round(load_cost - total_cost, 4),
         "hc_kwh": round(hc_kwh, 3),
         "hp_kwh": round(hp_kwh, 3),
         "hc_cost": round(hc_cost, 4),
