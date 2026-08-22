@@ -74,16 +74,20 @@ function flowNode(circleId, valueId, wireId, watts, { absent = false } = {}) {
 
 /** Power into (+) or out of (-) the battery, and where the figure came from.
  *
- * The pack's own BMS reports this directly, and that is the answer when it is
- * there: it is measured at the battery rather than inferred, so conversion
- * losses are already in it and a full pack idling on mains reads as the zero
- * it actually is.
+ * The BMS reports this directly and that is the better number -- measured at
+ * the pack, so conversion losses are already in it. But only when the firmware
+ * actually fills the field in. An E2000 taking a 105 W solar surplus, with the
+ * station's own estimate saying "full in 7h 41m", reported exactly 0: the
+ * frames arrive and both watt fields decode as zero, so the pair is dead on
+ * that firmware rather than absent.
  *
- * Inputs-minus-outputs is the fallback, for models whose BMS does not report
- * it. Right in sign and magnitude, off by the losses.
+ * Hence non-zero, not merely present. The rule is safe in the other direction
+ * too: where the field does work, a genuinely idle pack reads 0 and the
+ * fallback reads ~0 as well, since energy has to balance -- so both routes
+ * agree and the deadband calls it level either way.
  */
 function batteryFlow(s) {
-  if (s.battery_watts != null) return { watts: s.battery_watts, measured: true };
+  if (s.battery_watts) return { watts: s.battery_watts, measured: true };
   const inferred = netFlow(s);
   return inferred == null ? null : { watts: inferred, measured: false };
 }

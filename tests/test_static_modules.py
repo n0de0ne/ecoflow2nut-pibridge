@@ -100,3 +100,17 @@ def test_every_element_lookup_has_a_matching_id(module: Path) -> None:
     assert not missing, (
         f"{module.name} looks up ids that index.html does not define: {missing}"
     )
+
+
+def test_a_dead_bms_field_does_not_pin_the_meter_to_zero() -> None:
+    """The E2000 sends the pack watt fields as a constant zero.
+
+    Trusting "present" rather than "non-zero" made the meter read 0 W while a
+    105 W solar surplus was charging the battery and the station's own estimate
+    said "full in 7h 41m" -- the one reading the meter exists to get right.
+    """
+    source = (STATIC / "views.js").read_text()
+    assert "if (s.battery_watts)" in source, (
+        "battery_watts must be trusted only when non-zero; `!= null` accepts a "
+        "field the firmware never fills in"
+    )
