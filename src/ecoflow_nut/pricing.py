@@ -70,11 +70,18 @@ def compute_energy(
     sum_in = peak_in = 0.0
     # Valued at each bucket's own tariff, since both vary through the day.
     load_cost = solar_savings = 0.0
+    # Whether the station reports PV at all. avg() over an all-NULL column is
+    # NULL, so a model that never reports solar is distinguishable from one
+    # reporting a genuine zero -- and only the latter can honestly be called
+    # 0% solar.
+    solar_reported = False
     n = 0
     for item in series:
         in_w = float(item.get("in_w") or 0.0)
         out_w = float(item.get("out_w") or 0.0)
-        solar_w = float(item.get("solar_w") or 0.0)
+        raw_solar = item.get("solar_w")
+        solar_reported = solar_reported or raw_solar is not None
+        solar_w = float(raw_solar or 0.0)
         e_in = in_w * wh_per_bucket / 1000.0
         e_out = out_w * wh_per_bucket / 1000.0
         e_solar = solar_w * wh_per_bucket / 1000.0
@@ -100,6 +107,21 @@ def compute_energy(
     span_hours = (n * bucket_seconds) / 3600.0 if n else 0.0
     per_hour_cost = total_cost / span_hours if span_hours > 0 else 0.0
 
+    # Where the energy that went *in* came from. Deliberately a share of input,
+    # not of what the load drew: the two differ by however much the battery's
+    # own level moved over the window, and only input is measured directly.
+    #
+    # None, not 0/100, when the split is unknowable -- a station that never
+    # reports PV, or a window in which nothing came in at all. "100% grid" is a
+    # claim, and neither case supports it.
+    input_kwh = in_kwh + solar_kwh
+    if not solar_reported or input_kwh <= 0:
+        solar_share: float | None = None
+        grid_share: float | None = None
+    else:
+        solar_share = round(solar_kwh / input_kwh, 4)
+        grid_share = round(in_kwh / input_kwh, 4)
+
     return {
         "currency": pricing.currency,
         "pricing_enabled": pricing.enabled,
@@ -107,6 +129,10 @@ def compute_energy(
         "grid_kwh": round(in_kwh, 3),
         "load_kwh": round(out_kwh, 3),
         "solar_kwh": round(solar_kwh, 3),
+        "input_kwh": round(input_kwh, 3),
+        "solar_reported": solar_reported,
+        "solar_share": solar_share,
+        "grid_share": grid_share,
         # What the load itself would cost buying every kWh from the grid --
         # "what my servers cost to run" -- as opposed to total_cost, which is
         # what was actually bought at the wall.

@@ -172,3 +172,73 @@ def test_each_bucket_is_valued_at_its_own_tariff() -> None:
     assert money["solar_kwh"] == pytest.approx(2.0)
     # One kWh displaced off-peak at 0.10, one on-peak at 0.20 -- not 2 x either.
     assert money["solar_savings"] == pytest.approx(0.30)
+
+
+# ---------------------------------------------------------------------- #
+# Solar / grid split
+# ---------------------------------------------------------------------- #
+
+
+def test_the_split_is_a_share_of_what_came_in() -> None:
+    """Three parts grid to one part solar, whatever the load happened to do."""
+    series = _hourly(4, in_w=750.0, out_w=1000.0, solar_w=250.0)
+
+    money = compute_energy(series, 3600, PricingConfig(enabled=True))
+
+    assert money["input_kwh"] == pytest.approx(4.0)
+    assert money["solar_share"] == pytest.approx(0.25)
+    assert money["grid_share"] == pytest.approx(0.75)
+
+
+def test_the_two_shares_always_account_for_the_whole() -> None:
+    """Anything else draws a stacked bar that does not fill its own track."""
+    series = _hourly(3, in_w=317.0, out_w=400.0, solar_w=91.0)
+
+    money = compute_energy(series, 3600, PricingConfig(enabled=True))
+
+    assert money["solar_share"] + money["grid_share"] == pytest.approx(1.0, abs=1e-3)
+
+
+def test_a_model_that_never_reports_solar_has_no_split() -> None:
+    """Not 100% grid: a station with no PV sensor is not a station harvesting
+    nothing, and only one of those two supports the claim.
+
+    avg() over an all-NULL column comes back NULL, which is what tells them
+    apart -- coercing that to 0.0 would quietly assert the stronger one.
+    """
+    series = _hourly(2, in_w=500.0, out_w=500.0, solar_w=None)
+
+    money = compute_energy(series, 3600, PricingConfig(enabled=True))
+
+    assert money["solar_reported"] is False
+    assert money["solar_share"] is None
+    assert money["grid_share"] is None
+
+
+def test_a_reported_zero_harvest_is_a_real_hundred_percent_grid() -> None:
+    """The other side of it: a PV-capable station that harvested nothing at
+    night did genuinely run entirely off the wall."""
+    series = _hourly(2, in_w=500.0, out_w=500.0, solar_w=0.0)
+
+    money = compute_energy(series, 3600, PricingConfig(enabled=True))
+
+    assert money["solar_reported"] is True
+    assert money["solar_share"] == pytest.approx(0.0)
+    assert money["grid_share"] == pytest.approx(1.0)
+
+
+def test_a_window_with_no_input_at_all_has_no_split() -> None:
+    """Running the load off the battery with nothing coming in: the ratio is
+    0/0, and a bar has to show that as unknown rather than as either end."""
+    series = _hourly(2, in_w=0.0, out_w=500.0, solar_w=0.0)
+
+    money = compute_energy(series, 3600, PricingConfig(enabled=True))
+
+    assert money["input_kwh"] == 0.0
+    assert money["solar_share"] is None
+    assert money["grid_share"] is None
+
+
+def test_an_empty_series_has_no_split() -> None:
+    money = compute_energy([], 3600, PricingConfig(enabled=True))
+    assert money["solar_share"] is None and money["grid_share"] is None

@@ -102,6 +102,26 @@ def test_every_element_lookup_has_a_matching_id(module: Path) -> None:
     )
 
 
+def test_the_share_bar_sizes_itself_from_the_raw_shares() -> None:
+    """A rounded percent is a label, not a width.
+
+    Sizing the segments from `Math.round(share * 100)` dropped an hour of weak
+    sun off the bar entirely while the label beside it still read "<1%" -- the
+    picture and the number contradicting each other on the same line.
+    """
+    source = (STATIC / "views.js").read_text()
+    assert "solarSeg.style.flexGrow = known ? solar * 100 : 0;" in source
+    assert "gridSeg.style.flexGrow = known ? grid * 100 : 0;" in source
+    # Hidden only on a true zero, for the same reason.
+    assert "solarSeg.hidden = !known || solar <= 0;" in source
+
+
+def test_the_two_shares_are_labelled_as_one_split() -> None:
+    """Rounding each independently prints 51% beside 50%."""
+    source = (STATIC / "views.js").read_text()
+    assert "return [`${pct}%`, `${100 - pct}%`];" in source
+
+
 def test_the_meter_prefers_the_measured_pack_reading() -> None:
     """Zero from the BMS volts-and-amps is a real zero, so trust it as one.
 

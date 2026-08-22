@@ -589,6 +589,13 @@ and €/month, so you can see what your network stack and server cost to run. It
 follows the same window as the chart, so zooming into last Tuesday costs last
 Tuesday. See [Pricing](#electricity-pricing).
 
+*Where the energy came from* splits everything that came **in** across solar and
+grid, as one stacked bar with both percentages and both kWh figures. It is a
+share of input, not of what the load drew — between the two sits the battery,
+whose own level moves over the window. On a station that reports no PV at all the
+split reads `–` rather than "100% grid": a station with no solar sensor is not
+the same as one that harvested nothing, and only the second supports the claim.
+
 **Settings** — a dedicated page for the "runtime-safe" config: the full
 auto-shutdown policy (trigger/recover SoC %, grace periods, min-load watts, which
 outputs to cut, restore-on-recovery), NUT thresholds (low/warning %, runtime-low,

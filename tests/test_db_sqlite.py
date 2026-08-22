@@ -203,6 +203,47 @@ async def test_energy_series_window(tmp_path: Path) -> None:
         await store.close()
 
 
+async def test_a_store_with_no_solar_column_data_reports_no_solar(
+    tmp_path: Path,
+) -> None:
+    """End to end for the solar/grid split's unknown case.
+
+    These rows carry AC input and nothing else, as a model that does not report
+    PV would write them. avg() over the all-NULL column must arrive at the
+    pricing code as None -- coerce it to 0.0 anywhere on the way and the UI
+    claims "100% grid" for a station that simply cannot see its own panels.
+    """
+    from ecoflow_nut.config import PricingConfig
+    from ecoflow_nut.pricing import compute_energy
+
+    store = await _store(tmp_path)
+    try:
+        base = 1_700_000_000
+        store._conn.executemany(  # type: ignore[union-attr]
+            "INSERT INTO ecoflow_samples (ts, device, ac_input_watts) "
+            "VALUES (?, 'ecoflow', ?)",
+            [
+                (
+                    datetime.fromtimestamp(base + i * 60, tz=UTC).strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                    500.0,
+                )
+                for i in range(5)
+            ],
+        )
+        store._conn.commit()  # type: ignore[union-attr]
+        rows = await store.energy_series("ecoflow", 0, 60, since=base, until=base + 300)
+
+        assert all(r["solar_w"] is None for r in rows), "NULL must survive the query"
+        money = compute_energy(rows, 60, PricingConfig(enabled=True))
+        assert money["grid_kwh"] > 0, "the grid draw is real and still counted"
+        assert money["solar_reported"] is False
+        assert money["solar_share"] is None
+    finally:
+        await store.close()
+
+
 async def test_history_filters_by_device(tmp_path: Path) -> None:
     store = await _store(tmp_path)
     try:

@@ -524,6 +524,68 @@ export const history = {
 // Energy
 // ---------------------------------------------------------------------- //
 
+/**
+ * The two labels for one split, so they always describe the same thing.
+ *
+ * Rounding each share on its own prints "51%" beside "50%" often enough to
+ * notice, so one is rounded and the other is its complement. A contribution
+ * too small to round to a whole percent is still a contribution: it reads
+ * "<1%", never a flat "0%" that says it never happened.
+ */
+function shareLabels(solar) {
+  const pct = Math.round(solar * 100);
+  if (solar > 0 && pct === 0) return ["<1%", ">99%"];
+  if (solar < 1 && pct === 100) return [">99%", "<1%"];
+  return [`${pct}%`, `${100 - pct}%`];
+}
+
+/**
+ * The solar/grid split of everything that came in, as one stacked bar.
+ *
+ * Segment widths carry the ratio; the figures beside them carry it again in
+ * words, so nothing here depends on telling two colours apart -- and the
+ * numbers are all present as text for a screen reader without a table.
+ */
+function renderMix(d) {
+  const solar = d.solar_share;
+  const grid = d.grid_share;
+  const known = solar != null && grid != null;
+  const [solarLabel, gridLabel] = known ? shareLabels(solar) : ["–", "–"];
+
+  const bar = el("#mixBar");
+  const solarSeg = el("#mixSolar");
+  const gridSeg = el("#mixGrid");
+
+  // Widths come from the raw shares, not the rounded label: an hour of weak
+  // winter sun rounds to 0% but is not nothing, and a bar that drops it while
+  // the label beside it says "<1%" contradicts itself. min-width in the CSS
+  // keeps that sliver visible. Only a true zero is hidden -- a zero-width flex
+  // child still shows the 2px gap, which reads as a colour that contributed.
+  solarSeg.hidden = !known || solar <= 0;
+  gridSeg.hidden = !known || grid <= 0;
+  solarSeg.style.flexGrow = known ? solar * 100 : 0;
+  gridSeg.style.flexGrow = known ? grid * 100 : 0;
+  bar.classList.toggle("unknown", !known);
+
+  el("#mixSolarPct").textContent = solarLabel;
+  el("#mixGridPct").textContent = gridLabel;
+  el("#mixSolarKwh").textContent = `${(d.solar_kwh ?? 0).toFixed(2)} kWh`;
+  el("#mixGridKwh").textContent = `${(d.grid_kwh ?? 0).toFixed(2)} kWh`;
+
+  bar.setAttribute("aria-label", known
+    ? `Energy in: ${solarLabel} solar, ${gridLabel} grid, ` +
+      `${(d.input_kwh ?? 0).toFixed(2)} kWh total.`
+    : "Energy mix unavailable.");
+
+  el("#mixNote").textContent = !known && d.solar_reported === false
+    ? "This model does not report solar input, so the split is unknown — a " +
+      "station with no PV sensor is not the same as one harvesting nothing."
+    : !known
+      ? "Nothing came in over this window."
+      : `${(d.input_kwh ?? 0).toFixed(2)} kWh in. What came in, not what ` +
+        `powered the load — the battery sits in between.`;
+}
+
 export const energy = {
   needs: ["state"],
 
@@ -558,6 +620,7 @@ export const energy = {
         ? `${fmtMoney(d.cost_per_day, cur)}/day · <b>${fmtMoney(d.cost_per_month, cur)}/mo</b>`
         : "—";
       el("#eSolarKwh").textContent = (d.solar_kwh ?? 0).toFixed(2);
+      renderMix(d);
       el("#eLoadCost").textContent =
         d.pricing_enabled ? fmtMoney(d.load_cost, cur) : "—";
       el("#eSolarSaving").textContent =

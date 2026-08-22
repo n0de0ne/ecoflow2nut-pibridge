@@ -208,6 +208,28 @@
         <div class="metric sm"><div class="label">Projected</div>
           <div class="value"><span id="eProj">–</span></div></div>
       </div>
+      <h2 class="sub">Where the energy came from</h2>
+      <div class="share">
+        <div class="share-bar" id="mixBar" role="img" aria-label="Energy mix">
+          <span class="share-seg seg-solar" id="mixSolar" hidden></span>
+          <span class="share-seg seg-grid" id="mixGrid" hidden></span>
+        </div>
+        <div class="share-keys">
+          <div class="share-key">
+            <i class="seg-solar"></i><span class="share-k">Solar</span>
+            <b class="share-v" id="mixSolarPct">–</b>
+            <span class="share-sub" id="mixSolarKwh">–</span>
+          </div>
+          <div class="share-key">
+            <i class="seg-grid"></i><span class="share-k">Grid</span>
+            <b class="share-v" id="mixGridPct">–</b>
+            <span class="share-sub" id="mixGridKwh">–</span>
+          </div>
+        </div>
+        <p class="muted hint" id="mixNote">What came in, not what powered the
+          load — the battery sits in between.</p>
+      </div>
+
       <h2 class="sub">What it cost, what it saved</h2>
       <div class="grid">
         <div class="metric"><div class="label">Load cost (grid rates)</div>
