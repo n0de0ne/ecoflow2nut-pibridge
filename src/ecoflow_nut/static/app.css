@@ -585,3 +585,89 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
   .toast { animation: toastIn var(--dur) var(--ease); }
   @keyframes toastIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; } }
 }
+
+/* --------------------------------------------------------------------- */
+/* Power flow diagram                                                     */
+/* --------------------------------------------------------------------- */
+.flow-card { display: flex; justify-content: center; }
+.flow { width: 100%; max-width: 420px; height: auto; }
+
+/* Wires. Colour carries which port; the name and watts beside every node
+   carry identity, so nothing here depends on telling hues apart. */
+.wire {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.wire.active {
+  stroke-dasharray: 3 7;
+  animation: flow-dash 1.1s linear infinite;
+}
+@keyframes flow-dash { to { stroke-dashoffset: -20; } }
+@media (prefers-reduced-motion: reduce) {
+  .wire.active { animation: none; stroke-dasharray: none; }
+}
+#wAcIn.active  { stroke: var(--c-acin); }
+#wSolar.active { stroke: var(--c-solar); }
+#wAcOut.active { stroke: var(--c-acout); }
+#wDc.active    { stroke: var(--c-out); }
+#wUsb.active   { stroke: var(--c-usb); }
+
+/* Battery */
+.orb-well { fill: var(--surface-2); }
+.orb-ring { fill: none; stroke: var(--border); stroke-width: 2; }
+.orb-fill { fill: var(--c-soc); opacity: .85; transition: d var(--dur) var(--ease); }
+.orb-fill.warn { fill: var(--warn); }
+.orb-fill.crit { fill: var(--crit); }
+/* Both labels sit over the fill once the battery is more than half full, and
+   in each theme the fill and the ink are close in lightness -- light green
+   under near-white in dark, dark green under near-black in light. Neither
+   ordering is legible, so carry a surface-coloured halo and let that do the
+   separating rather than picking an ink that loses in one theme or the other. */
+.orb-soc, .orb-sub {
+  paint-order: stroke fill;
+  stroke: var(--surface);
+  stroke-linejoin: round;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+.orb-soc {
+  fill: var(--text);
+  font-size: 30px;
+  font-weight: 650;
+  stroke-width: 4px;
+}
+.orb-sub { fill: var(--text-dim); font-size: 11px; stroke-width: 3px; }
+/* The auto-shutdown trigger level, so the headroom before a cut is visible. */
+.reserve {
+  stroke: var(--text-dim);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: .7;
+}
+.reserve[hidden] { display: none; }
+
+/* Ports */
+.node { fill: var(--surface-2); stroke: var(--border); stroke-width: 2; }
+.node.on { stroke-width: 2.5; }
+.n-acin.on  { stroke: var(--c-acin); }
+.n-solar.on { stroke: var(--c-solar); }
+.n-acout.on { stroke: var(--c-acout); }
+.n-dc.on    { stroke: var(--c-out); }
+.n-usb.on   { stroke: var(--c-usb); }
+/* Text stays in text tokens -- the ring beside it carries the identity. */
+.node-val {
+  fill: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+.node-name {
+  fill: var(--text-dim);
+  font-size: 11px;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}

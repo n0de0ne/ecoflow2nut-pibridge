@@ -45,6 +45,69 @@ function portState(on, watts, unknownNote) {
   return ["on", w > 0 ? `ON · ${w}W` : "ON · idle", ""];
 }
 
+// Battery geometry, mirroring the SVG in index.html.
+const ORB = { top: 96, bottom: 204, left: 126, right: 234 };
+
+/** Fill the battery to `pct`, with a gently curved surface. */
+function orbSurface(pct) {
+  const span = ORB.bottom - ORB.top;
+  const level = ORB.bottom - (Math.max(0, Math.min(100, pct ?? 0)) / 100) * span;
+  // Flatten the wave as the battery empties or fills, so the surface never
+  // bulges outside the circle at the extremes.
+  const wave = Math.min(5, (ORB.bottom - level) / 6, (level - ORB.top) / 6);
+  const mid = (ORB.left + ORB.right) / 2;
+  return `M ${ORB.left} ${level} Q ${(ORB.left + mid) / 2} ${level - wave} ${mid} ${level}` +
+    ` T ${ORB.right} ${level} V ${ORB.bottom} H ${ORB.left} Z`;
+}
+
+function flowNode(circleId, valueId, wireId, watts, { absent = false } = {}) {
+  const node = el(circleId), value = el(valueId), wire = el(wireId);
+  if (!node) return;
+  const w = watts == null ? null : Math.round(watts);
+  // null means the model does not report this port at all, which is not the
+  // same as it reporting zero.
+  value.textContent = absent || w == null ? "–" : `${w}W`;
+  const live = w != null && w > 0;
+  node.classList.toggle("on", live);
+  wire?.classList.toggle("active", live);
+}
+
+function renderFlow(s) {
+  if (!el("#flow")) return;
+  flowNode("#nAcIn", "#flowAcIn", "#wAcIn", s.ac_input_watts);
+  flowNode("#nSolar", "#flowSolar", "#wSolar", s.solar_input_watts,
+    { absent: s.solar_input_watts == null });
+  flowNode("#nAcOut", "#flowAcOut", "#wAcOut", s.ac_output_watts);
+  flowNode("#nDc", "#flowDc", "#wDc", s.dc_output_watts);
+  flowNode("#nUsb", "#flowUsb", "#wUsb",
+    (s.usb_output_watts ?? 0) + (s.usbc_output_watts ?? 0));
+
+  const soc = s.soc_percent;
+  el("#flowSoc").textContent = soc == null ? "–" : `${Math.round(soc)}%`;
+  const fill = el("#flowFill");
+  fill.setAttribute("d", orbSurface(soc));
+  fill.classList.toggle("crit", soc != null && soc < 15);
+  fill.classList.toggle("warn", soc != null && soc >= 15 && soc < 30);
+
+  const charging = (s.status || "").startsWith("OL");
+  const mins = charging ? s.remain_charge_minutes : s.remain_discharge_minutes;
+  const estimate = fmtMinutes(mins);
+  el("#flowRemain").textContent =
+    estimate === "–" ? "" : `${charging ? "full in" : "left"} ${estimate}`;
+}
+
+/** Mark the auto-shutdown trigger level, so headroom before a cut is visible. */
+function renderReserve(a) {
+  const line = el("#flowReserve");
+  if (!line) return;
+  const pct = a?.enabled ? a.trigger_soc_percent : null;
+  if (pct == null) { line.setAttribute("hidden", ""); return; }
+  line.removeAttribute("hidden");
+  const y = ORB.bottom - (Math.max(0, Math.min(100, pct)) / 100) * (ORB.bottom - ORB.top);
+  line.setAttribute("y1", y);
+  line.setAttribute("y2", y);
+}
+
 function renderPorts(s) {
   // Where a port has a decoded flow flag these are the device's own states,
   // never inferences from power draw.
@@ -94,12 +157,14 @@ function renderState(s) {
   const mins = charging ? s.remain_charge_minutes : s.remain_discharge_minutes;
   const estimate = fmtMinutes(mins);
   num("#remain", estimate === "–" ? "–" : `${charging ? "chg" : "dsg"} ${estimate}`);
+  renderFlow(s);
   renderPorts(s);
   applyControlLock();
 }
 
 function renderAuto(a) {
   if (!a) return;
+  renderReserve(a);
   let kind, text;
   if (!a.enabled) { kind = "off"; text = "Disabled"; }
   // Checked before `triggered`: the state machine latches that before any I/O,

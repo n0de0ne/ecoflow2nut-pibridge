@@ -38,6 +38,53 @@
 
   <!-- ---------------------------------------------------------------- -->
   <section data-view="dashboard" hidden>
+    <div class="card flow-card">
+      <svg id="flow" class="flow" viewBox="0 0 360 320" role="img"
+           aria-labelledby="flowTitle" preserveAspectRatio="xMidYMid meet">
+        <title id="flowTitle">Live power flow</title>
+
+        <!-- wires: authored source -> sink, so one dash animation serves both -->
+        <path class="wire" id="wAcIn"  d="M 80 68 V 84 Q 80 96 92 96 H 180"/>
+        <path class="wire" id="wSolar" d="M 280 68 V 84 Q 280 96 268 96 H 180"/>
+        <path class="wire" id="wAcOut" d="M 180 204 V 224 Q 180 236 168 236 H 60"/>
+        <path class="wire" id="wDc"    d="M 180 204 V 236"/>
+        <path class="wire" id="wUsb"   d="M 180 204 V 224 Q 180 236 192 236 H 300"/>
+
+        <!-- battery -->
+        <circle class="orb-well" cx="180" cy="150" r="54"/>
+        <clipPath id="orbClip"><circle cx="180" cy="150" r="54"/></clipPath>
+        <g clip-path="url(#orbClip)">
+          <path id="flowFill" class="orb-fill" d="M 126 204 H 234 V 204 H 126 Z"/>
+        </g>
+        <line id="flowReserve" class="reserve" x1="126" y1="204" x2="234" y2="204"/>
+        <circle class="orb-ring" cx="180" cy="150" r="54"/>
+        <text id="flowSoc" class="orb-soc" x="180" y="152">–</text>
+        <text id="flowRemain" class="orb-sub" x="180" y="174">–</text>
+
+        <!-- sources -->
+        <text class="node-name" x="80" y="14">Grid</text>
+        <circle id="nAcIn" class="node n-acin" cx="80" cy="42" r="26"/>
+        <text id="flowAcIn" class="node-val" x="80" y="47">–</text>
+
+        <text class="node-name" x="280" y="14">Solar</text>
+        <circle id="nSolar" class="node n-solar" cx="280" cy="42" r="26"/>
+        <text id="flowSolar" class="node-val" x="280" y="47">–</text>
+
+        <!-- sinks -->
+        <circle id="nAcOut" class="node n-acout" cx="60" cy="262" r="26"/>
+        <text id="flowAcOut" class="node-val" x="60" y="267">–</text>
+        <text class="node-name" x="60" y="306">AC out</text>
+
+        <circle id="nDc" class="node n-dc" cx="180" cy="262" r="26"/>
+        <text id="flowDc" class="node-val" x="180" y="267">–</text>
+        <text class="node-name" x="180" y="306">12V DC</text>
+
+        <circle id="nUsb" class="node n-usb" cx="300" cy="262" r="26"/>
+        <text id="flowUsb" class="node-val" x="300" y="267">–</text>
+        <text class="node-name" x="300" y="306">USB</text>
+      </svg>
+    </div>
+
     <div class="card">
       <div class="grid">
         <div class="metric">
