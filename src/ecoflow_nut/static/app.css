@@ -719,3 +719,66 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
   margin-top: 4px;
 }
 h2.sub { margin-top: 20px; }
+
+/* --------------------------------------------------------------------- */
+/* Charge / discharge meter                                               */
+/* --------------------------------------------------------------------- */
+/* Polarity, so the encoding is diverging: one hue each side of a neutral
+   centre. The state is spelled out in words beside it, so the direction is
+   never carried by colour alone. */
+.meter { width: 100%; margin-top: 14px; }
+.meter-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.meter-state { color: var(--text); font-size: 13px; font-weight: 600; }
+.meter-val {
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.meter-track {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.meter-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--text-dim);
+  transition: left 400ms var(--ease), width 400ms var(--ease),
+    background-color var(--dur) var(--ease);
+}
+.meter-fill.charging { background: var(--ok); }
+.meter-fill.draining { background: var(--c-out); }
+/* The centre is the reading you most need to find, so mark it on top. */
+.meter-zero {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--border);
+}
+.meter-ends {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 5px;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: .04em;
+}
+@media (prefers-reduced-motion: reduce) {
+  .meter-fill { transition: none; }
+}

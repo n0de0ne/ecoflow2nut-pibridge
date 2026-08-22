@@ -90,6 +90,54 @@ function netFlow(s) {
   return supply - draw;
 }
 
+// Below this the battery is neither charging nor draining in any meaningful
+// sense: conversion losses and rounding alone move the figure by a watt or two,
+// and a meter that flips its label on that noise is worse than no meter.
+const FLOW_DEADBAND_W = 8;
+
+/** Plain words for what the battery is doing, and why.
+ *
+ * The question this answers is not "how many watts" -- the number is right
+ * there -- but whether solar is *filling* the battery or merely cancelling the
+ * load. Those look identical on a wattage readout and completely different in
+ * what they mean for the evening.
+ */
+function batteryState(s, flow) {
+  const solar = s.solar_input_watts ?? 0;
+  const grid = s.ac_input_watts ?? 0;
+  if (flow == null) return { key: "idle", text: "–" };
+  if (flow > FLOW_DEADBAND_W) {
+    if (solar > 0 && grid <= 0) return { key: "charging", text: "Solar charging" };
+    if (solar > 0) return { key: "charging", text: "Charging · solar + grid" };
+    return { key: "charging", text: "Charging from grid" };
+  }
+  if (flow < -FLOW_DEADBAND_W) {
+    if (solar > 0) {
+      // The interesting middle: PV is carrying part of the load, the pack the
+      // rest. Not charging, but not unassisted discharge either.
+      return { key: "draining", text: "Solar offsetting · battery covering the rest" };
+    }
+    if (grid > 0) return { key: "draining", text: "Draining · grid not keeping up" };
+    return { key: "draining", text: "Running on battery" };
+  }
+  if (solar > 0) return { key: "level", text: "Solar covering the load" };
+  return { key: "level", text: "Holding steady" };
+}
+
+/** Signed fraction of full scale, compressed so small flows stay visible.
+ *
+ * Linear against a 2400 W rating would render a 30 W trickle as one pixel and
+ * a 200 W surplus as eight, which is the range that matters most here. A
+ * square-root curve keeps the small end readable while a full-rate charge
+ * still reaches the end; the exact number is printed alongside, so the bar
+ * only has to carry direction and rough size.
+ */
+function meterFraction(flow, rated) {
+  const scale = Math.max(100, rated || 1000);
+  const unit = Math.min(1, Math.abs(flow) / scale);
+  return Math.sign(flow) * Math.sqrt(unit);
+}
+
 /** Which way the battery is going, and how long it has -- with a source.
  *
  * Direction cannot come from ups.status: OL means the mains are present, not
@@ -116,6 +164,28 @@ function timeLeft(s) {
   const ours = fmtRuntime(s.runtime_seconds);
   if (charging || ours === "idle") return { charging, text: "–", source: null };
   return { charging: false, text: ours, source: "estimate" };
+}
+
+/** The charge/discharge meter: direction, magnitude and what it means. */
+function renderBatteryMeter(s) {
+  const fill = el("#netFill");
+  if (!fill) return;
+  const flow = netFlow(s);
+  const state = batteryState(s, flow);
+
+  el("#battState").textContent = state.text;
+  const value = el("#netFlow");
+  value.textContent = flow == null
+    ? "–" : `${flow > 0 ? "+" : flow < 0 ? "−" : "±"}${Math.abs(Math.round(flow))} W`;
+  value.title = "Inputs minus outputs. Positive means the battery is gaining.";
+
+  const frac = flow == null ? 0 : meterFraction(flow, s.rated_watts);
+  // The bar grows from the centre, so a negative flow moves its left edge out
+  // rather than its right.
+  fill.style.left = `${frac >= 0 ? 50 : 50 + frac * 50}%`;
+  fill.style.width = `${Math.abs(frac) * 50}%`;
+  fill.classList.toggle("charging", state.key === "charging");
+  fill.classList.toggle("draining", state.key === "draining");
 }
 
 function renderFlow(s) {
@@ -194,14 +264,7 @@ function renderState(s) {
   // this strip a second copy of the diagram again. Net flow is the thing the
   // diagram implies but never states: which way the battery is going, and how
   // hard. The station makes up whatever the inputs do not cover.
-  const flow = netFlow(s);
-  const net = el("#netFlow");
-  net.textContent = flow == null
-    ? "–" : `${flow > 0 ? "+" : flow < 0 ? "−" : ""}${Math.abs(Math.round(flow))} W`;
-  net.title = flow == null ? ""
-    : flow > 0 ? "Inputs exceed the load; the battery is charging."
-    : flow < 0 ? "The load exceeds the inputs; the battery is covering the rest."
-    : "Inputs match the load.";
+  renderBatteryMeter(s);
   renderFlow(s);
   renderPorts(s);
   applyControlLock();

@@ -88,10 +88,22 @@
       <div class="flow-strip">
         <div class="fs"><span class="fs-k">Battery</span>
           <span class="fs-v"><span id="soc">–</span><span class="unit">%</span></span></div>
-        <div class="fs"><span class="fs-k">Net flow</span>
-          <span class="fs-v" id="netFlow">–</span></div>
         <div class="fs"><span class="fs-k">Grid voltage</span>
           <span class="fs-v" id="acInV">–</span></div>
+      </div>
+
+      <div class="meter" id="battMeter">
+        <div class="meter-head">
+          <span class="meter-state" id="battState">–</span>
+          <span class="meter-val" id="netFlow">–</span>
+        </div>
+        <div class="meter-track">
+          <div class="meter-fill" id="netFill"></div>
+          <div class="meter-zero"></div>
+        </div>
+        <div class="meter-ends">
+          <span>drawing from battery</span><span>charging battery</span>
+        </div>
       </div>
     </div>
 

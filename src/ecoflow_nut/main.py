@@ -296,6 +296,10 @@ class Daemon:
             # The bridge drives several models, so the UI names the configured
             # one rather than hardcoding a device the user may not own.
             "device_model": self._config.nut.static_values.model,
+            # Full scale for the charge/discharge meter. Without it the UI has
+            # to guess, and a guess that suits a 2400 W station makes a 300 W
+            # one look permanently idle.
+            "rated_watts": self._config.nut.realpower_nominal,
             # So the UI can say what it is waiting for rather than just that it
             # is waiting.
             "link_state": self._link_state,
