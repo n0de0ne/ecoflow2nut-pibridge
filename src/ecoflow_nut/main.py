@@ -319,6 +319,7 @@ class Daemon:
             "ac_input_watts": s.ac_input_watts,
             "ac_input_voltage": s.ac_input_voltage,
             "solar_input_watts": s.solar_input_watts,
+            "battery_watts": s.battery_watts,
             "ac_output_watts": s.ac_output_watts,
             "usb_output_watts": s.usb_output_watts,
             "usbc_output_watts": s.usbc_output_watts,

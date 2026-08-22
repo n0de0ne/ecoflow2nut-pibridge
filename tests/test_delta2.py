@@ -539,3 +539,41 @@ def test_a_partial_ems_frame_keeps_the_last_known_estimate():
     cut = full[: rawstruct.size_of(short_of_chg)]
     delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x02, cut))
     assert state.remain_charge_minutes == 95, "never mentioned, so never changed"
+
+
+def test_the_bms_reports_charge_and_discharge_directly():
+    """The pack says which way it is going; inferring it is second best.
+
+    Inputs-minus-outputs misses conversion losses and cannot separate a full
+    battery idling on mains from one trickling, which is exactly the
+    distinction the dashboard meter exists to draw.
+    """
+    charging = rawstruct.pack(
+        delta2.BMS_HEARTBEAT, {"input_watts": 640, "output_watts": 0, "soc": 80}
+    )
+    state = DeviceState()
+    assert delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x32, charging))
+    assert state.battery_watts == pytest.approx(640)
+
+    discharging = rawstruct.pack(
+        delta2.BMS_HEARTBEAT, {"input_watts": 0, "output_watts": 254, "soc": 80}
+    )
+    assert delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x32, discharging))
+    assert state.battery_watts == pytest.approx(-254), "discharge reads negative"
+
+    idle = rawstruct.pack(
+        delta2.BMS_HEARTBEAT, {"input_watts": 0, "output_watts": 0, "soc": 100}
+    )
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x32, idle))
+    assert state.battery_watts == pytest.approx(0)
+
+
+def test_battery_watts_stays_unset_when_the_pack_does_not_report_it():
+    """A model that never sends the pair must fall back, not read zero.
+
+    Zero would claim the battery is idle; None lets the UI say it is inferring.
+    """
+    state = DeviceState()
+    ems = rawstruct.pack(delta2.EMS_HEARTBEAT, {"f32_lcd_show_soc": 55.0})
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x02, ems))
+    assert state.battery_watts is None

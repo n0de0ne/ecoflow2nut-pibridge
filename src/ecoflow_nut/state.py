@@ -56,6 +56,12 @@ class DeviceState:
     remain_charge_minutes: int | None = None
     remain_discharge_minutes: int | None = None
     error_code: int | None = None
+    # Power into (+) or out of (-) the battery itself, as the pack's own BMS
+    # reports it. Distinct from inputs-minus-outputs: that arithmetic misses
+    # conversion losses and cannot tell a full battery idling on mains from one
+    # quietly trickling. ``None`` on models whose BMS does not report it, where
+    # the UI falls back to the arithmetic.
+    battery_watts: float | None = None
     # Live solar (PV) input in watts, summed across the device's PV channels.
     # On the DELTA 2 generation the solar and car/DC inputs share one physical
     # XT60 connector, driven by the MPPT charge controller -- so this is

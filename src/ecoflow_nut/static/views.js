@@ -72,12 +72,23 @@ function flowNode(circleId, valueId, wireId, watts, { absent = false } = {}) {
   wire?.classList.toggle("active", live);
 }
 
-/** Inputs minus outputs, in watts. Positive means the battery is gaining.
+/** Power into (+) or out of (-) the battery, and where the figure came from.
  *
- * An approximation: conversion losses mean the pack does not receive quite
- * what this says. It is the sign and the order of magnitude that carry the
- * meaning, and both are right.
+ * The pack's own BMS reports this directly, and that is the answer when it is
+ * there: it is measured at the battery rather than inferred, so conversion
+ * losses are already in it and a full pack idling on mains reads as the zero
+ * it actually is.
+ *
+ * Inputs-minus-outputs is the fallback, for models whose BMS does not report
+ * it. Right in sign and magnitude, off by the losses.
  */
+function batteryFlow(s) {
+  if (s.battery_watts != null) return { watts: s.battery_watts, measured: true };
+  const inferred = netFlow(s);
+  return inferred == null ? null : { watts: inferred, measured: false };
+}
+
+/** Inputs minus outputs, in watts. Positive means the battery is gaining. */
 function netFlow(s) {
   const parts = [
     s.ac_input_watts, s.solar_input_watts,
@@ -150,7 +161,7 @@ function meterFraction(flow, rated) {
  * when it does not.
  */
 function timeLeft(s) {
-  const flow = netFlow(s) ?? 0;
+  const flow = batteryFlow(s)?.watts ?? 0;
   const charging = flow > 0;
   const device = charging ? s.remain_charge_minutes : s.remain_discharge_minutes;
   const other = charging ? s.remain_discharge_minutes : s.remain_charge_minutes;
@@ -170,14 +181,17 @@ function timeLeft(s) {
 function renderBatteryMeter(s) {
   const fill = el("#netFill");
   if (!fill) return;
-  const flow = netFlow(s);
+  const reading = batteryFlow(s);
+  const flow = reading?.watts ?? null;
   const state = batteryState(s, flow);
 
   el("#battState").textContent = state.text;
   const value = el("#netFlow");
   value.textContent = flow == null
     ? "–" : `${flow > 0 ? "+" : flow < 0 ? "−" : "±"}${Math.abs(Math.round(flow))} W`;
-  value.title = "Inputs minus outputs. Positive means the battery is gaining.";
+  value.title = reading?.measured
+    ? "Measured at the battery by its own BMS. Positive means charging."
+    : "Inferred from inputs minus outputs, so short by the conversion losses.";
 
   const frac = flow == null ? 0 : meterFraction(flow, s.rated_watts);
   // The bar grows from the centre, so a negative flow moves its left edge out

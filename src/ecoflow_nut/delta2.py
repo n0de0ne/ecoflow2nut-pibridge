@@ -500,6 +500,18 @@ def _merge_bms(state: DeviceState, bms: dict[str, Any]) -> None:
     elif (v := bms.get("soc")) is not None:
         state.update_soc(float(v), "bms")
 
+    # The pack's own charge/discharge power, which beats inferring it from the
+    # ports: only one of the pair is non-zero at a time, so the difference is a
+    # signed figure straight from the BMS.
+    #
+    # Watts rather than the `amp` field alongside them: pack current is signed
+    # in this protocol and the layout reads it unsigned, so a discharge would
+    # decode as roughly 4.3 billion. These two are magnitudes, so unsigned is
+    # right for them.
+    charge, discharge = bms.get("input_watts"), bms.get("output_watts")
+    if charge is not None or discharge is not None:
+        state.battery_watts = float(charge or 0.0) - float(discharge or 0.0)
+
 
 def _merge_mppt(state: DeviceState, mppt: dict[str, Any]) -> None:
     """Sum the PV channels into ``solar_input_watts``.
