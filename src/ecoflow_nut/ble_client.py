@@ -474,6 +474,11 @@ class EcoFlowBLE:
         # dropping once a day have completely different causes -- and guessing
         # at it from the gaps between log lines is no way to work.
         self._connected_monotonic: float = 0.0
+        # Set while we are the ones taking the link down, so a clean shutdown
+        # does not log like a fault. Every restart produced a warning-level
+        # "ble.disconnected", which is a false signal in exactly the logs
+        # someone reads when hunting a real drop.
+        self._closing = False
         # Last raw notification, to drop BlueZ's duplicate deliveries.
         self._last_notification: tuple[float, bytes] | None = None
         # Strong references to in-flight reply tasks (see _reply).
@@ -542,6 +547,7 @@ class EcoFlowBLE:
         log.info("ble.found", mac=mac, encrypt_type=self._encrypt_type)
 
         self._authenticated.clear()
+        self._closing = False
         log.debug("ble.connecting", mac=mac)
         self._client = await self._establish(device)
         self._connected_monotonic = time.monotonic()
@@ -895,12 +901,16 @@ class EcoFlowBLE:
             if self._connected_monotonic
             else None
         )
-        log.warning("ble.disconnected", link_seconds=held)
+        if self._closing:
+            log.info("ble.disconnected", link_seconds=held, requested=True)
+        else:
+            log.warning("ble.disconnected", link_seconds=held)
         self._connected_monotonic = 0.0
         self._authenticated.clear()
         self._cancel_replies()
 
     async def disconnect(self) -> None:
+        self._closing = True
         self._cancel_replies()
         if self._client is not None and self._client.is_connected:
             try:

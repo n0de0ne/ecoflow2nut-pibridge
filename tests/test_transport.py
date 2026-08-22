@@ -564,3 +564,39 @@ def test_a_broken_state_consumer_cannot_stop_telemetry():
     # And the next frame still gets through, rather than the stream being dead.
     client._handle_payload(_frame(2, b"\x01" * 60))
     assert len(calls) == 2
+
+
+async def test_a_disconnect_we_asked_for_does_not_log_like_a_fault(monkeypatch):
+    """Every restart logged a warning-level drop, which is a false signal.
+
+    These logs are what gets read when hunting a real disconnect; a clean
+    shutdown appearing among them as a warning is worse than no line at all.
+    """
+    from ecoflow_nut import ble_client
+
+    client = _client_for_dedupe_test()
+    levels: list[tuple[str, dict]] = []
+
+    class _Log:
+        def info(self, event, **kw): levels.append(("info", {"event": event, **kw}))
+        def warning(self, event, **kw): levels.append(("warning", {"event": event, **kw}))
+        def debug(self, event, **kw): pass
+
+    async def _clear(_mac, _adapter): return False
+
+    monkeypatch.setattr(ble_client, "clear_stale_connection", _clear)
+    original, ble_client.log = ble_client.log, _Log()
+    try:
+        # An unexpected drop is still a warning.
+        client._on_disconnect(None)
+        assert levels[-1][0] == "warning"
+
+        # One we initiated is not.
+        await client.disconnect()
+        client._on_disconnect(None)
+    finally:
+        ble_client.log = original
+
+    level, record = levels[-1]
+    assert level == "info", "a shutdown we asked for is not a fault"
+    assert record["requested"] is True
