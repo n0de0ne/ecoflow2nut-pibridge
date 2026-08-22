@@ -381,3 +381,43 @@ async def test_a_bus_that_will_not_connect_is_not_fatal(monkeypatch):
 
     monkeypatch.setattr(dbus_fast.aio, "MessageBus", lambda **_kw: _Broken())
     assert await clear_stale_connection("DC:06:75:A8:3E:29", "hci0") is False
+
+
+async def test_disconnect_makes_sure_bluez_agrees(monkeypatch):
+    """bleak thinking the link is gone is not the same as BlueZ letting it go.
+
+    A half-open link reads as disconnected to bleak while BlueZ still holds the
+    ACL, so the bleak-level teardown is skipped -- and BlueZ keeps that link
+    after the process exits. The next start then burns a whole scan timeout
+    finding out, which is what made every restart need a hand.
+    """
+    from ecoflow_nut import ble_client
+
+    client = _client_for_dedupe_test()
+    cleared: list[tuple[str, str]] = []
+
+    async def _clear(mac: str, adapter: str) -> bool:
+        cleared.append((mac, adapter))
+        return True
+
+    monkeypatch.setattr(ble_client, "clear_stale_connection", _clear)
+
+    await client.disconnect()  # nothing bleak-side to tear down
+    assert cleared == [("DE:AD:BE:EF:00:01", "hci0")]
+
+
+async def test_disconnect_survives_bluez_being_unreachable(monkeypatch):
+    """Teardown must never raise: it runs in the reconnect loop's finally.
+
+    An exception here escapes the handler whose whole job is to keep
+    reconnecting, turning a transient D-Bus problem into a dead bridge.
+    """
+    from ecoflow_nut import ble_client
+
+    client = _client_for_dedupe_test()
+
+    async def _boom(_mac: str, _adapter: str) -> bool:
+        raise OSError("no system bus")
+
+    monkeypatch.setattr(ble_client, "clear_stale_connection", _boom)
+    await client.disconnect()  # must not raise

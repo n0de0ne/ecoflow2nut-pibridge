@@ -886,6 +886,22 @@ class EcoFlowBLE:
                 log.debug("ble.disconnect_error", error=str(exc))
         self._client = None
 
+        # Then make sure BlueZ agrees, because it need not. bleak's view of the
+        # link and BlueZ's can diverge -- a half-open link reads as disconnected
+        # to bleak while BlueZ still holds the ACL -- and the branch above skips
+        # the teardown in exactly that case. BlueZ then keeps the link after we
+        # exit, the station stops advertising, and the next start burns a full
+        # scan timeout discovering it. Cheap to be sure: one D-Bus round trip
+        # that no-ops when the link really is down.
+        #
+        # Never let this raise. It runs in the reconnect loop's finally, where an
+        # exception would escape the handler that exists to keep reconnecting.
+        try:
+            if await clear_stale_connection(self._ecoflow.mac.upper(), self._ble.adapter):
+                log.info("ble.link_released_via_bluez")
+        except Exception as exc:  # noqa: BLE001
+            log.debug("ble.disconnect_error", error=str(exc))
+
 
 class BleakConnectionError(RuntimeError):
     """Raised for connection/handshake failures."""
