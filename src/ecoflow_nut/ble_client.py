@@ -490,6 +490,12 @@ class EcoFlowBLE:
         return override if override is not None else self._driver.packet_version
 
     @property
+    def ack_frames(self) -> bool:
+        """Echo recognised frames back? The config override, else the driver's."""
+        override = self._ecoflow.ack_frames
+        return override if override is not None else self._driver.ack_frames
+
+    @property
     def last_read_monotonic(self) -> float:
         return self._last_read_monotonic
 
@@ -819,13 +825,14 @@ class EcoFlowBLE:
             self._last_read_monotonic = asyncio.get_event_loop().time()
             if self._on_state is not None:
                 self._on_state(self.state)
-            # Reply so the device keeps streaming richer data. Keep a strong
-            # reference: a bare create_task may be garbage-collected while it
-            # is still running, and its exception then surfaces as an
-            # unretrieved-future warning instead of being handled below.
-            task = asyncio.create_task(self._reply(packet))
-            self._reply_tasks.add(task)
-            task.add_done_callback(self._reply_tasks.discard)
+            if self.ack_frames:
+                # Keep a strong reference: a bare create_task may be garbage-
+                # collected while it is still running, and its exception then
+                # surfaces as an unretrieved-future warning instead of being
+                # handled below.
+                task = asyncio.create_task(self._reply(packet))
+                self._reply_tasks.add(task)
+                task.add_done_callback(self._reply_tasks.discard)
 
     async def _reply(self, packet: Packet) -> None:
         # The link may have dropped between the frame arriving and this task

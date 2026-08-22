@@ -31,6 +31,13 @@ class EcoflowConfig:
     # Sending the wrong version makes a device drop the connection during
     # authentication rather than reply, so ``ecoflow-nut probe`` sweeps this.
     packet_version: int | None = None
+    # Echo each recognised telemetry frame back to the device? None uses the
+    # driver's default: on for the DELTA 3, which sends one periodic frame and
+    # expects it acknowledged, off for the DELTA 2 generation, which streams
+    # several heartbeats a second on its own timer -- there, echoing puts
+    # several full-size writes per second onto the link for no benefit. Set
+    # true if a model turns out to stop streaming without it.
+    ack_frames: bool | None = None
 
 
 @dataclass(slots=True)

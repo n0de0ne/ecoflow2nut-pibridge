@@ -7,6 +7,7 @@ DELTA 2 generation carry no dsrc/ddst, so they are two bytes shorter than the
 V3 frames of the DELTA 3 generation.
 """
 
+import asyncio
 from dataclasses import fields
 
 import pytest
@@ -421,3 +422,99 @@ async def test_disconnect_survives_bluez_being_unreachable(monkeypatch):
 
     monkeypatch.setattr(ble_client, "clear_stale_connection", _boom)
     await client.disconnect()  # must not raise
+
+
+def test_the_delta2_generation_does_not_echo_frames_back():
+    """Five heartbeats a second, echoed, is five full-size writes a second.
+
+    This generation broadcasts on its own timer and asks for nothing, so the
+    echo buys no data and spends radio time on a link that is meant to be
+    carrying telemetry one way.
+    """
+    from ecoflow_nut import delta2, delta3
+
+    assert delta2.DELTA2_MAX.ack_frames is False
+    assert delta2.DELTA2.ack_frames is False
+    # The DELTA 3 sends one periodic frame and does expect it acknowledged.
+    assert delta3.DRIVER.ack_frames is True
+
+
+def test_ack_frames_can_be_forced_from_config():
+    """A one-line rollback if some model does turn out to need the echo."""
+    from ecoflow_nut.ble_client import EcoFlowBLE
+    from ecoflow_nut.config import BleConfig, EcoflowConfig
+
+    def _client(**kw):
+        return EcoFlowBLE(
+            EcoflowConfig(mac="DE:AD:BE:EF:00:01", serial="E201X", model="e2000", **kw),
+            BleConfig(),
+        )
+
+    assert _client().ack_frames is False, "driver default"
+    assert _client(ack_frames=True).ack_frames is True
+    assert _client(ack_frames=False).ack_frames is False
+
+
+async def test_no_reply_task_is_spawned_when_acks_are_off(monkeypatch):
+    """The saving is real only if the write never happens."""
+    client = _client_for_dedupe_test()
+    replied: list[object] = []
+
+    async def _reply(packet):  # pragma: no cover - must never run
+        replied.append(packet)
+
+    monkeypatch.setattr(client, "_reply", _reply)
+    client._handle_payload(_frame(2, b"\x00" * 60))
+    await asyncio.sleep(0)
+    assert replied == []
+    assert not client._reply_tasks
+
+
+async def test_a_reply_is_still_sent_when_acks_are_on(monkeypatch):
+    """The other half: the DELTA 3's ack must not have been switched off."""
+    from ecoflow_nut.ble_client import EcoFlowBLE
+    from ecoflow_nut.config import BleConfig, EcoflowConfig
+
+    client = EcoFlowBLE(
+        EcoflowConfig(
+            mac="DE:AD:BE:EF:00:01", serial="E201X", model="e2000", ack_frames=True
+        ),
+        BleConfig(),
+    )
+    replied: list[object] = []
+
+    async def _reply(packet):
+        replied.append(packet)
+
+    monkeypatch.setattr(client, "_reply", _reply)
+    client._handle_payload(_frame(2, b"\x00" * 60))
+    await asyncio.sleep(0)
+    assert len(replied) == 1
+
+
+def test_eve_reports_a_missing_adapter_by_name(monkeypatch):
+    """eve.adapter defaults to hci1, and most Pis only have hci0.
+
+    Without this the symptom is a scan that silently finds nothing, which reads
+    as "the outlet is not there" rather than "you have no such radio".
+    """
+    from ecoflow_nut import eve_outlet
+
+    monkeypatch.setattr(eve_outlet, "available_adapters", lambda: ["hci0"])
+
+    with pytest.raises(eve_outlet.EveError) as exc:
+        eve_outlet.check_adapter("hci1")
+    message = str(exc.value)
+    assert "hci1" in message, "name the adapter that is missing"
+    assert "hci0" in message, "and the one that is actually there"
+    assert "eve.adapter" in message, "and the setting that fixes it"
+
+    eve_outlet.check_adapter("hci0")  # the one that exists is fine
+
+
+def test_eve_adapter_check_stays_quiet_when_it_cannot_tell(monkeypatch):
+    """A host that keeps its adapters elsewhere must not be blocked."""
+    from ecoflow_nut import eve_outlet
+
+    monkeypatch.setattr(eve_outlet, "available_adapters", list)
+    eve_outlet.check_adapter("hci9")  # must not raise

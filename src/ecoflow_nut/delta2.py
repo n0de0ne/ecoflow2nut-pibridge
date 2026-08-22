@@ -357,6 +357,9 @@ class Delta2Driver:
     # recognised message full of nonsense values -- check it with ``sniff``.
     xor_payload: bool
     packet_version: int = PACKET_VERSION
+    # This generation broadcasts its heartbeats unprompted, so an echo buys
+    # nothing and costs a full-size write several times a second.
+    ack_frames: bool = False
 
     # -- read ---------------------------------------------------------------- #
     def handle_packet(self, state: DeviceState, packet: Packet) -> bool:

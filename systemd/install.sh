@@ -46,6 +46,14 @@ python3 -m venv "${APP_DIR}/.venv"
 # logging). They are inert unless enabled in config.yaml, so this is safe even if
 # you never turn the web UI on.
 "${APP_DIR}/.venv/bin/pip" install "${APP_DIR}[server]"
+# The Eve outlet extra (aiohomekit), same deal: inert unless eve.enabled is set.
+# Kept as its own best-effort step because it is the one dependency that has to
+# build on some platforms, and a bridge that will not install because an
+# *optional* outlet driver would not compile is a bad trade.
+if ! "${APP_DIR}/.venv/bin/pip" install "${APP_DIR}[eve]"; then
+    echo "==> NOTE: the optional [eve] extra (aiohomekit) did not install."
+    echo "    Everything else is fine; only 'ecoflow-nut eve ...' needs it."
+fi
 chown -R ecoflow:nut "${APP_DIR}"
 
 echo "==> Installing NUT configuration into ${NUT_CONF_DIR}..."
@@ -120,4 +128,13 @@ Optional web UI (control dashboard):
   - Open http://<pi-ip>:8080
   - For Postgres history set 'postgres.enabled: true' and a 'dsn' (or
     ECOFLOW_PG_DSN). The aiohttp/asyncpg deps are already installed above.
+
+Optional Eve outlet (cut ONE downstream load, not the whole AC bank):
+  - Reset the outlet and remove it from Apple Home first: a HomeKit accessory
+    pairs to a single controller, and this makes the bridge that controller.
+  - ecoflow-nut --config /etc/ecoflow-nut/config.yaml eve discover  # -> device_id
+  - Put device_id + setup_code in the 'eve' section, then 'eve pair'.
+  - Set 'eve.enabled: true' and restart; its tile appears on the dashboard.
+  - eve.adapter defaults to hci1. A second BT dongle is strongly preferred --
+    the EcoFlow link is persistent, and sharing one radio costs telemetry.
 EOF

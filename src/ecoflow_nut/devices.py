@@ -62,6 +62,19 @@ class DeviceDriver(Protocol):
         """
         ...
 
+    @property
+    def ack_frames(self) -> bool:
+        """Whether to echo each recognised telemetry frame back to the device.
+
+        The DELTA 3 sends one periodic frame and expects it acknowledged. The
+        DELTA 2 generation streams five subsystem heartbeats a second on its own
+        timer, so echoing each one back puts several full-size writes per second
+        onto a link that is only meant to be carrying them one way -- constant
+        self-inflicted radio traffic, for an acknowledgement nothing asked for.
+        Override with ``ecoflow.ack_frames`` if a model turns out to need it.
+        """
+        ...
+
     def handle_packet(self, state: DeviceState, packet: Packet) -> bool:
         """Merge a telemetry frame into ``state``; False if not recognised."""
         ...
@@ -91,6 +104,8 @@ class RawDriver:
     #: Off by default -- de-obfuscating a device that does not obfuscate turns
     #: good frames into noise, and the sniffer should show what actually arrived.
     xor_payload: bool = False
+    #: Nothing is decoded, so there is nothing to acknowledge.
+    ack_frames: bool = False
 
     def handle_packet(self, state: DeviceState, packet: Packet) -> bool:
         return False

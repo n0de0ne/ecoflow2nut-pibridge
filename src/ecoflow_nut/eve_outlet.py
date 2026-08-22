@@ -87,6 +87,36 @@ def _find_char(accessories: Any, accepted: frozenset[str]) -> tuple[int, int] | 
     return None
 
 
+def available_adapters() -> list[str]:
+    """Bluetooth adapters the kernel is exposing, e.g. ``["hci0", "hci1"]``."""
+    try:
+        return sorted(p.name for p in Path("/sys/class/bluetooth").iterdir())
+    except OSError:
+        return []
+
+
+def check_adapter(adapter: str) -> None:
+    """Fail early and legibly if the configured adapter does not exist.
+
+    ``eve.adapter`` defaults to ``hci1``, because a second dongle is the right
+    way to run this -- the EcoFlow link is persistent and latency-sensitive, and
+    sharing one radio with the outlet's connect/disconnect cycles costs
+    telemetry. The cost of that default is that the usual first run happens on a
+    Pi with only ``hci0``, where the symptom is a scan that silently finds
+    nothing rather than a word about the adapter.
+
+    Says nothing when the adapter list cannot be read, so a machine that keeps
+    its adapters elsewhere is never blocked by a false negative.
+    """
+    present = available_adapters()
+    if not present or adapter in present:
+        return
+    raise EveError(
+        f"bluetooth adapter {adapter!r} not found (this host has: "
+        f"{', '.join(present)}). Set eve.adapter in your config."
+    )
+
+
 def _make_scanner(adapter: str) -> Any:
     """A BleakScanner that still exposes ``register_detection_callback``.
 
@@ -114,6 +144,7 @@ def _make_scanner(adapter: str) -> Any:
         def register_detection_callback(self, callback: Any) -> None:
             self._ahk_callback = callback
 
+    check_adapter(adapter)
     return _CompatScanner(adapter=adapter)
 
 
@@ -163,6 +194,7 @@ async def _scan_for_device(adapter: str, device_id: str, timeout: int) -> tuple[
             found["device"], found["adv"] = device, adv
             done.set()
 
+    check_adapter(adapter)
     scanner = BleakScanner(detection_callback=_cb, adapter=adapter)
     await scanner.start()
     try:
@@ -450,6 +482,7 @@ async def raw_scan(adapter: str, timeout: int = 10) -> list[dict[str, Any]]:
         if homekit is not None:
             entry["homekit"] = homekit
 
+    check_adapter(adapter)
     scanner = BleakScanner(detection_callback=_cb, adapter=adapter)
     await scanner.start()
     try:

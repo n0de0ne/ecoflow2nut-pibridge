@@ -245,6 +245,8 @@ class Delta3Driver:
     # The captured frames in tests/data carry a non-zero seq[0] and only decode
     # to sensible telemetry once de-obfuscated, so this family does XOR.
     xor_payload: bool = True
+    #: One periodic frame, which the device expects acknowledged.
+    ack_frames: bool = True
 
     def handle_packet(self, state: DeviceState, packet: Packet) -> bool:
         if not is_display_packet(packet):
