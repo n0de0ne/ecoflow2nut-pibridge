@@ -328,3 +328,82 @@ def test_missing_columns_are_added_to_an_existing_database(tmp_path):
         assert {"ac_input_watts", "status", "error_code"} <= columns
     finally:
         asyncio.run(store.close())
+
+
+async def test_solar_is_never_billed_as_grid_energy(tmp_path: Path) -> None:
+    """Cost is metered on AC input alone, because the sun does not invoice.
+
+    ``input_watts`` is the device's *total* intake -- mains plus PV plus the car
+    port -- so costing against it would charge for every free watt harvested.
+    Nothing pinned that choice before: it was correct only by construction, and
+    a refactor reaching for the more obvious-sounding "input" column would have
+    silently inflated every figure on the Energy page.
+    """
+    from ecoflow_nut.config import PricingConfig
+    from ecoflow_nut.pricing import compute_energy
+
+    store = await _store(tmp_path)
+    try:
+        # A sunny hour: 900 W of PV, nothing at all drawn from the wall.
+        solar = DeviceState(
+            soc_percent=80.0,
+            ac_input_watts=0.0,
+            solar_input_watts=900.0,
+            input_watts=900.0,  # total intake, as the PD heartbeat reports it
+            ac_output_watts=200.0,
+            output_watts=200.0,
+        )
+        base = time.time() - 3600
+        for i in range(6):
+            await store.record("ecoflow", solar, "OL", 3600)
+            store._conn.execute(  # type: ignore[union-attr]
+                "UPDATE ecoflow_samples SET ts = datetime(?, 'unixepoch') "
+                "WHERE rowid = (SELECT max(rowid) FROM ecoflow_samples)",
+                (base + i * 600,),
+            )
+        store._conn.commit()  # type: ignore[union-attr]
+
+        series = await store.energy_series("ecoflow", minutes=120, bucket_width=600)
+        assert series, "the samples are there"
+        assert all((row["in_w"] or 0.0) == 0.0 for row in series), (
+            "the grid series must see none of the solar"
+        )
+
+        money = compute_energy(series, 600, PricingConfig(enabled=True, price_hp=0.25))
+        assert money["grid_kwh"] == 0.0
+        assert money["total_cost"] == 0.0
+        assert money["peak_grid_watts"] == 0.0
+    finally:
+        await store.close()
+
+
+async def test_mains_draw_is_still_billed(tmp_path: Path) -> None:
+    """The other half: AC input must actually reach the bill."""
+    from ecoflow_nut.config import PricingConfig
+    from ecoflow_nut.pricing import compute_energy
+
+    store = await _store(tmp_path)
+    try:
+        grid = DeviceState(
+            soc_percent=50.0,
+            ac_input_watts=600.0,
+            solar_input_watts=0.0,
+            input_watts=600.0,
+            ac_output_watts=100.0,
+        )
+        base = time.time() - 3600
+        for i in range(6):
+            await store.record("ecoflow", grid, "OL", 3600)
+            store._conn.execute(  # type: ignore[union-attr]
+                "UPDATE ecoflow_samples SET ts = datetime(?, 'unixepoch') "
+                "WHERE rowid = (SELECT max(rowid) FROM ecoflow_samples)",
+                (base + i * 600,),
+            )
+        store._conn.commit()  # type: ignore[union-attr]
+
+        series = await store.energy_series("ecoflow", minutes=120, bucket_width=600)
+        money = compute_energy(series, 600, PricingConfig(enabled=True, price_hp=0.25))
+        assert money["grid_kwh"] == pytest.approx(0.6, abs=0.01), "600 W for an hour"
+        assert money["total_cost"] > 0
+    finally:
+        await store.close()

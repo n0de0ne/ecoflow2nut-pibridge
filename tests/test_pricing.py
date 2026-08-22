@@ -77,3 +77,26 @@ def test_projection_scales_to_day_and_month() -> None:
     assert abs(out["total_cost"] - 0.04) < 1e-6
     # per-day ~= hourly cost * 24
     assert abs(out["cost_per_day"] - 0.04 * 24) < 1e-3
+
+
+def test_both_backends_meter_cost_on_ac_input_only() -> None:
+    """Solar must not reach the bill on either store.
+
+    The SQLite path is exercised for real in test_db_sqlite; Postgres has no
+    server here, so its query is pinned by text instead of going unchecked.
+    ``input_watts`` is the device's total intake -- mains plus PV plus the car
+    port -- and metering against it would charge for every free watt harvested.
+    """
+    import inspect
+
+    from ecoflow_nut import db, db_sqlite
+
+    sources = {
+        "postgres": inspect.getsource(db.TelemetryStore.energy_series),
+        "sqlite": inspect.getsource(db_sqlite.SqliteTelemetryStore._energy_series_sync),
+    }
+    for backend, source in sources.items():
+        assert "avg(ac_input_watts)" in source, f"{backend} does not meter on AC input"
+        assert "avg(input_watts)" not in source, (
+            f"{backend} meters on total input, which bills solar as grid energy"
+        )
