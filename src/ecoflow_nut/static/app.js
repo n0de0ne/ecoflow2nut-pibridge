@@ -181,6 +181,16 @@ function reopenEventStream() {
 // Freshness pill
 // ---------------------------------------------------------------------- //
 
+/** What the bridge is doing while it has no telemetry yet: label, tooltip. */
+const LINK_STATES = {
+  starting: ["starting up", "The bridge is coming up."],
+  connecting: ["connecting…", "Scanning for the device and opening the link."],
+  authenticating: ["authenticating…", "Connected; completing the handshake."],
+  connected: ["waiting for data", "Connected and authenticated; no frame decoded yet."],
+  reconnecting: ["reconnecting…", "The link dropped. Backing off before retrying."],
+  error: ["link error", "The last connection attempt failed."],
+};
+
 function renderFreshness() {
   const chip = el("#freshness");
   const text = el("#freshnessText");
@@ -199,9 +209,13 @@ function renderFreshness() {
   const age = s?.updated_seconds_ago;
   const staleAfter = Math.max(15, (publishSeconds() ?? 5) * 3);
   if (age == null) {
-    chip.classList.add("warn");
-    text.textContent = "awaiting device";
-    chip.title = "The bridge is up but has not decoded a frame yet.";
+    // Say what it is waiting for. A four-second reconnect and a device that is
+    // genuinely gone are the same three words otherwise, which is exactly the
+    // ambiguity that makes a healthy link look flaky.
+    const [label, note] = LINK_STATES[s?.link_state] ?? LINK_STATES.starting;
+    chip.classList.add(s?.link_state === "error" ? "bad" : "warn");
+    text.textContent = label;
+    chip.title = s?.link_error || note;
   } else if (age > staleAfter) {
     chip.classList.add("warn");
     text.textContent = `BLE stale · ${fmtAgo(age)}`;

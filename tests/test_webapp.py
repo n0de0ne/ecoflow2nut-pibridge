@@ -577,3 +577,46 @@ async def test_events_stream_honours_read_auth(harness: _Harness) -> None:
         ok.close()
     finally:
         await client.close()
+
+
+def test_state_says_what_the_link_is_doing(tmp_path):
+    """"awaiting device" alone cannot distinguish a reconnect from a dead device.
+
+    A four-second reconnect and a station that is genuinely gone rendered
+    identically, which is precisely what makes a healthy link look flaky.
+    """
+    from ecoflow_nut.config import Config, EcoflowConfig
+    from ecoflow_nut.main import Daemon
+
+    config = Config(
+        ecoflow=EcoflowConfig(
+            mac="DC:06:75:A8:3E:29", serial="E201ZE1APH560861", model="e2000"
+        )
+    )
+    config.nut.dev_file_path = str(tmp_path / "ecoflow.dev")
+    config.settings_file = str(tmp_path / "settings.json")
+    daemon = Daemon(config)
+
+    assert daemon._web_state()["link_state"] == "starting"
+
+    daemon._link_state = "error"
+    daemon._link_error = "device DC:06:75:A8:3E:29 not found during scan"
+    payload = daemon._web_state()
+    assert payload["link_state"] == "error"
+    assert "not found during scan" in payload["link_error"], (
+        "the reason has to reach the dashboard, not just the journal"
+    )
+
+
+def test_every_link_state_the_daemon_sets_has_a_label():
+    """A state with no label falls back to "starting up", which would lie."""
+    import re
+    from pathlib import Path
+
+    static = Path("src/ecoflow_nut/static/app.js").read_text()
+    labelled = set(re.findall(r"^  (\w+): \[", static, re.M))
+
+    daemon_src = Path("src/ecoflow_nut/main.py").read_text()
+    assigned = set(re.findall(r'_link_state = "(\w+)"', daemon_src))
+
+    assert assigned <= labelled, f"unlabelled link states: {sorted(assigned - labelled)}"

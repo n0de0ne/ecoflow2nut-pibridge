@@ -118,6 +118,11 @@ class Daemon:
         self._latest_status: str = "OB"
         self._latest_runtime: int = 0
         self._latest_update_monotonic: float = 0.0
+        # What the BLE link is doing right now, for the dashboard. Without this
+        # a four-second reconnect and a device that is genuinely gone both
+        # render as "awaiting device", which is no way to tell them apart.
+        self._link_state = "starting"
+        self._link_error: str | None = None
         # Optional subsystems (web UI / Postgres), created in run() when enabled.
         self._web: object | None = None
         self._store: object | None = None
@@ -147,16 +152,22 @@ class Daemon:
                     on_state=self._on_state,
                 )
                 try:
+                    self._link_state = "connecting"
                     await client.connect()
+                    self._link_state = "authenticating"
                     if not await client.wait_authenticated(timeout=30):
                         raise TimeoutError("authentication/first-read timed out")
                     log.info("daemon.connected")
+                    self._link_state = "connected"
+                    self._link_error = None
                     backoff = 1.0
                     self._active_client = client
                     await self._poll_loop(client)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001
+                    self._link_state = "error"
+                    self._link_error = str(exc)
                     log.error(
                         "daemon.connection_error",
                         error=str(exc),
@@ -170,6 +181,8 @@ class Daemon:
                 if self._stop.is_set():
                     break
                 backoff = min(backoff * 2, self._config.ble.reconnect_backoff_max_seconds)
+                if self._link_state != "error":
+                    self._link_state = "reconnecting"
                 log.info("daemon.reconnect_wait", seconds=round(backoff, 1))
                 await self._sleep_or_stop(backoff)
         finally:
@@ -283,6 +296,10 @@ class Daemon:
             # The bridge drives several models, so the UI names the configured
             # one rather than hardcoding a device the user may not own.
             "device_model": self._config.nut.static_values.model,
+            # So the UI can say what it is waiting for rather than just that it
+            # is waiting.
+            "link_state": self._link_state,
+            "link_error": self._link_error,
         }
         if s is None:
             return {
