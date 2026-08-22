@@ -8,7 +8,7 @@
 
 import {
   api, applyTheme, autoStore, BASE, el, els, fmtAgo, getRefresh, getTheme,
-  healthStore, resolveRefreshMs, setToken, stateStore, toast,
+  getToken, healthStore, resolveRefreshMs, setToken, stateStore, toast,
 } from "./core.js";
 import {
   applyControlLock, control, dashboard, energy, history, settings,
@@ -204,6 +204,16 @@ function renderFreshness() {
     chip.classList.add("bad");
     text.textContent = "bridge unreachable";
     chip.title = health.reason;
+    return;
+  }
+  if (!s) {
+    // No payload yet -- that says nothing about the device, only that we have
+    // not heard from the bridge. Claiming the bridge is "starting up" here is a
+    // guess, and a wrong one whenever the page simply loaded before its first
+    // response landed.
+    chip.classList.add("warn");
+    text.textContent = "connecting";
+    chip.title = "Waiting for the first response from the bridge.";
     return;
   }
   const age = s?.updated_seconds_ago;
