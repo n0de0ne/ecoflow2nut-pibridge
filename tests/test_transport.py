@@ -518,3 +518,19 @@ def test_eve_adapter_check_stays_quiet_when_it_cannot_tell(monkeypatch):
 
     monkeypatch.setattr(eve_outlet, "available_adapters", list)
     eve_outlet.check_adapter("hci9")  # must not raise
+
+
+def test_connection_nodes_are_not_mistaken_for_adapters(monkeypatch, tmp_path):
+    """/sys/class/bluetooth also holds a node per live connection.
+
+    A Pi with one radio and one connected device shows "hci0  hci0:64" -- the
+    second is a connection handle on hci0, not a second radio. Counting it would
+    overstate what the host has, and make the list change as devices come and go.
+    """
+    from ecoflow_nut import eve_outlet
+
+    for name in ("hci0", "hci0:64", "hci1"):
+        (tmp_path / name).mkdir()
+    monkeypatch.setattr(eve_outlet, "Path", lambda _p: tmp_path)
+
+    assert eve_outlet.available_adapters() == ["hci0", "hci1"]

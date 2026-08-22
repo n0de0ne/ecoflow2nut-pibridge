@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +47,11 @@ _ON_TYPES = frozenset({"25", "000000250000100080000026bb765291"})
 # so it only ever appears in full form. Present on the metering Eve Energy;
 # absent on non-metering outlets, which is why reads of it are optional.
 _WATT_TYPES = frozenset({"e863f10d079e48ff8f279c2605a29f52"})
+
+
+# A Bluetooth adapter, as opposed to the connection nodes (hciN:HANDLE) that
+# share /sys/class/bluetooth with them.
+_ADAPTER_NAME = re.compile(r"hci\d+")
 
 
 class EveError(RuntimeError):
@@ -88,11 +94,18 @@ def _find_char(accessories: Any, accepted: frozenset[str]) -> tuple[int, int] | 
 
 
 def available_adapters() -> list[str]:
-    """Bluetooth adapters the kernel is exposing, e.g. ``["hci0", "hci1"]``."""
+    """Bluetooth adapters the kernel is exposing, e.g. ``["hci0", "hci1"]``.
+
+    Only entries named ``hciN``. The same directory also carries a node per live
+    connection (``hci0:64`` is a connection handle on ``hci0``, not a second
+    radio), and listing those as adapters would both overstate what the host has
+    and make the count change as devices come and go.
+    """
     try:
-        return sorted(p.name for p in Path("/sys/class/bluetooth").iterdir())
+        names = [p.name for p in Path("/sys/class/bluetooth").iterdir()]
     except OSError:
         return []
+    return sorted(n for n in names if _ADAPTER_NAME.fullmatch(n))
 
 
 def check_adapter(adapter: str) -> None:
