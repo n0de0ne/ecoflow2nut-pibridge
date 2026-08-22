@@ -46,12 +46,12 @@ python3 -m venv "${APP_DIR}/.venv"
 # logging). They are inert unless enabled in config.yaml, so this is safe even if
 # you never turn the web UI on.
 "${APP_DIR}/.venv/bin/pip" install "${APP_DIR}[server]"
+# Home Assistant via MQTT discovery. Inert unless mqtt.enabled is set.
+"${APP_DIR}/.venv/bin/pip" install "${APP_DIR}[mqtt]"
 # The Eve outlet extra (aiohomekit), same deal: inert unless eve.enabled is set.
 # Kept as its own best-effort step because it is the one dependency that has to
 # build on some platforms, and a bridge that will not install because an
 # *optional* outlet driver would not compile is a bad trade.
-# Home Assistant via MQTT discovery. Inert unless mqtt.enabled is set.
-"${APP_DIR}/.venv/bin/pip" install "${APP_DIR}[mqtt]"
 if ! "${APP_DIR}/.venv/bin/pip" install "${APP_DIR}[eve]"; then
     echo "==> NOTE: the optional [eve] extra (aiohomekit) did not install."
     echo "    Everything else is fine; only 'ecoflow-nut eve ...' needs it."

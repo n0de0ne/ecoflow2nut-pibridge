@@ -1,22 +1,22 @@
 /* ---------------------------------------------------------------------- *
  * Design tokens. Dark is the default; light follows the system unless the
  * header toggle pins a choice via data-theme on <html>.
+ *
+ * The light palette is written twice -- once inside the media query, once for
+ * the pinned override -- because an attribute selector cannot re-enter a media
+ * query. tests/test_static_assets.py pins the two copies together so they
+ * cannot drift apart unnoticed.
  * ---------------------------------------------------------------------- */
 :root {
   color-scheme: dark;
   --bg: #0f1115;
   --surface: #151823;
-  --surface-2: #1b1f2b;
-  --border: #222631;
   --text: #e6e6e6;
   --text-dim: #8a93a6;
   --accent: #a9c2ff;
   --ok: #7ee2a8;
-  --ok-bg: #16432a;
   --warn: #f2c969;
-  --warn-bg: #5a4216;
   --crit: #f29494;
-  --crit-bg: #5a1d1d;
   --chart-grid: #222631;
   --chart-crosshair: #3a4356;
   --c-soc: #7ee2a8;
@@ -26,14 +26,42 @@
   --c-usb: #d3a4f0;
   --c-in: #6fd3d0;
   --c-out: #f0a06f;
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, .3);
-  --shadow-2: 0 8px 24px rgba(0, 0, 0, .45);
-  --radius: 8px;
-  --radius-lg: 14px;
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 22px;
   --rail: 216px;
-  --tabbar: 60px;
-  --dur: 160ms;
-  --ease: cubic-bezier(.2, .7, .3, 1);
+  /* Height the floating tab bar reserves at the foot of the page. */
+  --tabbar: 70px;
+  --dur: 200ms;
+  /* Overshoots slightly, the way iOS springs do. */
+  --ease: cubic-bezier(.22, 1, .36, 1);
+
+  /* Glass. Surfaces are translucent and blur what is behind them, so the page
+     needs something behind them worth blurring -- see the body gradient.
+     Tint strength is deliberately high: legibility beats transparency, and a
+     thinner glass would drop body text below its contrast floor. */
+  --glass: rgba(26, 30, 42, .62);
+  /* For anything that floats over content rather than sitting in the page --
+     toasts, the save bar, tooltips -- where the thing behind is busy. */
+  --glass-strong: rgba(26, 30, 42, .86);
+  --glass-edge: rgba(255, 255, 255, .10);
+  --glass-hi: rgba(255, 255, 255, .09);
+  /* Strokes in the flow diagram. Heavier than --glass-edge: a hairline
+     tuned for a 1px border disappears once it is SVG geometry. */
+  --ring: rgba(255, 255, 255, .22);
+  --knob: #f1f3f7;
+  --glass-blur: saturate(180%) blur(24px);
+  /* Fills *on* glass: soft for trays, plain for controls, hover for feedback.
+     Translucent rather than solid, so a control still shows the backdrop and
+     the layering stays readable as depth. */
+  --fill-soft: rgba(255, 255, 255, .05);
+  --fill: rgba(255, 255, 255, .10);
+  --fill-hover: rgba(255, 255, 255, .17);
+  --tint-a: rgba(88, 128, 255, .30);
+  --tint-b: rgba(126, 226, 168, .18);
+  --tint-c: rgba(196, 122, 255, .16);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .3);
+  --shadow-glass: 0 10px 30px rgba(0, 0, 0, .32);
 }
 
 @media (prefers-color-scheme: light) {
@@ -41,28 +69,36 @@
     color-scheme: light;
     --bg: #f5f6f8;
     --surface: #ffffff;
-    --surface-2: #eef0f4;
-    --border: #dfe3ea;
     --text: #1a1d24;
     --text-dim: #656d7e;
     --accent: #2f5bd0;
     --ok: #1a7f4b;
-    --ok-bg: #d6f2e2;
     --warn: #8a6100;
-    --warn-bg: #fdefcd;
     --crit: #b3261e;
-    --crit-bg: #fadad7;
     --chart-grid: #e4e8ef;
     --chart-crosshair: #9aa3b4;
     --c-soc: #1a7f4b;
     --c-acout: #b07d00;
     --c-acin: #2f5bd0;
-  --c-solar: #b5560a;
+    --c-solar: #b5560a;
     --c-usb: #7b3fa8;
     --c-in: #0f7f7c;
     --c-out: #c25a1c;
+    --glass: rgba(255, 255, 255, .68);
+    --glass-strong: rgba(255, 255, 255, .90);
+    --glass-edge: rgba(16, 24, 40, .10);
+    --glass-hi: rgba(255, 255, 255, .85);
+    --ring: rgba(16, 24, 40, .20);
+    --knob: #ffffff;
+    --glass-blur: saturate(180%) blur(24px);
+    --fill-soft: rgba(16, 24, 40, .035);
+    --fill: rgba(16, 24, 40, .07);
+    --fill-hover: rgba(16, 24, 40, .12);
+    --tint-a: rgba(47, 91, 208, .22);
+    --tint-b: rgba(26, 160, 110, .18);
+    --tint-c: rgba(150, 90, 220, .14);
     --shadow-1: 0 1px 2px rgba(16, 24, 40, .06);
-    --shadow-2: 0 8px 24px rgba(16, 24, 40, .12);
+    --shadow-glass: 0 10px 30px rgba(16, 24, 40, .10);
   }
 }
 
@@ -70,17 +106,12 @@
   color-scheme: light;
   --bg: #f5f6f8;
   --surface: #ffffff;
-  --surface-2: #eef0f4;
-  --border: #dfe3ea;
   --text: #1a1d24;
   --text-dim: #656d7e;
   --accent: #2f5bd0;
   --ok: #1a7f4b;
-  --ok-bg: #d6f2e2;
   --warn: #8a6100;
-  --warn-bg: #fdefcd;
   --crit: #b3261e;
-  --crit-bg: #fadad7;
   --chart-grid: #e4e8ef;
   --chart-crosshair: #9aa3b4;
   --c-soc: #1a7f4b;
@@ -90,12 +121,26 @@
   --c-usb: #7b3fa8;
   --c-in: #0f7f7c;
   --c-out: #c25a1c;
+  --glass: rgba(255, 255, 255, .68);
+  --glass-strong: rgba(255, 255, 255, .90);
+  --glass-edge: rgba(16, 24, 40, .10);
+  --glass-hi: rgba(255, 255, 255, .85);
+  --ring: rgba(16, 24, 40, .20);
+  --knob: #ffffff;
+  --glass-blur: saturate(180%) blur(24px);
+  --fill-soft: rgba(16, 24, 40, .035);
+  --fill: rgba(16, 24, 40, .07);
+  --fill-hover: rgba(16, 24, 40, .12);
+  --tint-a: rgba(47, 91, 208, .22);
+  --tint-b: rgba(26, 160, 110, .18);
+  --tint-c: rgba(150, 90, 220, .14);
   --shadow-1: 0 1px 2px rgba(16, 24, 40, .06);
-  --shadow-2: 0 8px 24px rgba(16, 24, 40, .12);
+  --shadow-glass: 0 10px 30px rgba(16, 24, 40, .10);
 }
 
 /* ---------------------------------------------------------------------- *
- * Base
+ * Base. Written phone-first: everything below is what a 390px screen gets,
+ * and the one breakpoint at the foot of the file adds the desktop rail.
  * ---------------------------------------------------------------------- */
 * { box-sizing: border-box; }
 
@@ -106,15 +151,26 @@ body {
   margin: 0;
   min-height: 100vh;
   min-height: 100dvh;
-  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-  background: var(--bg);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", sans-serif;
   color: var(--text);
+  /* Three soft pools of colour, fixed so they do not travel with the scroll.
+     Without a backdrop the blur has nothing to work on and the glass reads as
+     flat translucency -- so these are the whole reason the material shows. */
+  background:
+    radial-gradient(980px 620px at 8% -6%, var(--tint-a), transparent 60%),
+    radial-gradient(820px 560px at 104% 6%, var(--tint-b), transparent 58%),
+    radial-gradient(760px 620px at 50% 108%, var(--tint-c), transparent 62%),
+    var(--bg);
+  background-attachment: fixed;
   overscroll-behavior-y: contain;
   -webkit-tap-highlight-color: transparent;
   display: grid;
-  grid-template-columns: var(--rail) 1fr;
+  /* minmax(0, 1fr), not 1fr: an auto column takes its minimum from the widest
+     item's min-content, so the app bar's own contents pushed the whole page
+     43px wider than a 390px phone and every view scrolled sideways. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto 1fr;
-  grid-template-areas: "bar bar" "nav main";
+  grid-template-areas: "bar" "main";
 }
 
 /* Digits stop jittering as values tick. */
@@ -123,7 +179,36 @@ body {
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: 6px;
+}
+
+/* ---------------------------------------------------------------------- *
+ * The glass material
+ * ---------------------------------------------------------------------- *
+ * One rule for every surface that floats over the backdrop. The -webkit-
+ * property comes first because Safari shipped the effect years before the
+ * unprefixed name and still needs it on older iOS.
+ */
+.appbar,
+.nav,
+.card,
+.save-bar,
+.toast,
+.chart-tip,
+dialog {
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--shadow-glass), inset 0 1px 0 var(--glass-hi);
+}
+
+/* No backdrop-filter (Firefox with it disabled, older engines): the tint on its
+   own is far too thin to read text on, so fall back to the opaque surface. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .appbar, .nav, .card, .save-bar, .toast, .chart-tip, dialog {
+    background: var(--surface);
+  }
 }
 
 /* ---------------------------------------------------------------------- *
@@ -136,44 +221,64 @@ body {
   z-index: 20;
   display: flex;
   align-items: center;
-  gap: .6rem;
-  padding: .75rem 1rem;
-  padding-top: calc(.75rem + env(safe-area-inset-top));
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  gap: .5rem;
+  padding: 8px 14px;
+  padding-top: calc(8px + env(safe-area-inset-top));
+  /* A grid item's automatic minimum is its min-content width, so without this
+     the bar refuses to shrink and drags the whole page wider than the phone. */
+  min-width: 0;
+  border-radius: 0;
+  border-inline: 0;
+  border-top: 0;
 }
 .appbar h1 {
-  font-size: 1rem; margin: 0; font-weight: 650;
-  letter-spacing: -.01em; white-space: nowrap;
+  font-size: 1rem;
+  margin: 0;
+  font-weight: 650;
+  letter-spacing: -.01em;
+  /* Truncate rather than push. The model name is the one variable-length item
+     in the bar; a long one used to shove the buttons off a phone screen. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-pill {
   margin-left: auto;
-  padding: .2rem .6rem;
+  padding: .22rem .6rem;
   border-radius: 999px;
-  font-size: .78rem;
+  font-size: .76rem;
   font-weight: 650;
-  background: var(--surface-2);
+  background: var(--fill);
   color: var(--text-dim);
+  white-space: nowrap;
 }
-.status-OL { background: var(--ok-bg); color: var(--ok); }
-.status-OB { background: var(--warn-bg); color: var(--warn); }
-.status-LB { background: var(--crit-bg); color: var(--crit); }
+.status-OL { background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--ok); }
+.status-OB { background: color-mix(in srgb, var(--warn) 24%, transparent); color: var(--warn); }
+.status-LB { background: color-mix(in srgb, var(--crit) 24%, transparent); color: var(--crit); }
 
 .chip {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: .4rem;
-  padding: .25rem .6rem;
-  border: 1px solid var(--border);
+  /* 44px is Apple's floor for anything a thumb has to hit, and the freshness
+     chip is the manual refresh. */
+  min-height: 44px;
+  padding: 0 .7rem;
+  border: 1px solid var(--glass-edge);
   border-radius: 999px;
-  background: transparent;
+  background: var(--fill-soft);
   color: var(--text-dim);
   font: inherit;
-  font-size: .76rem;
+  font-size: .74rem;
+  font-weight: 550;
   white-space: nowrap;
   cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 }
+.chip:hover { background: var(--fill); }
 .chip .dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--text-dim); flex: 0 0 auto;
@@ -184,93 +289,95 @@ body {
 .chip.warn, .chip.bad { color: var(--text); }
 
 .icon-btn {
-  border: 0; background: transparent; color: var(--text-dim);
-  font-size: 1rem; cursor: pointer; padding: .3rem .4rem; border-radius: var(--radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 1.05rem;
+  cursor: pointer;
+  border-radius: 999px;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 }
-.icon-btn:hover { background: var(--surface-2); color: var(--text); }
+.icon-btn:hover { background: var(--fill); color: var(--text); }
 
 /* ---------------------------------------------------------------------- *
- * Navigation: side rail on desktop, bottom tab bar on mobile
+ * Navigation: a floating tab bar on a phone, a side rail on a desktop
  * ---------------------------------------------------------------------- */
 .nav {
   grid-area: nav;
+  position: fixed;
+  /* Inset from the edges so it reads as a floating object with the page
+     sliding under it, which is the whole point of the material. */
+  inset: auto 12px calc(10px + env(safe-area-inset-bottom)) 12px;
+  z-index: 20;
   display: flex;
-  flex-direction: column;
-  gap: .15rem;
-  padding: .75rem .5rem;
-  border-right: 1px solid var(--border);
-  background: var(--surface);
+  gap: 4px;
+  padding: 6px;
+  border-radius: var(--radius-lg);
 }
 .nav a {
+  flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: .7rem;
-  padding: .6rem .75rem;
-  border-radius: var(--radius);
+  justify-content: center;
+  gap: 2px;
+  min-height: 48px;
+  border-radius: 16px;
   color: var(--text-dim);
   text-decoration: none;
-  font-weight: 550;
+  font-size: .66rem;
+  font-weight: 600;
+  letter-spacing: .01em;
   transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 }
-.nav a:hover { background: var(--surface-2); color: var(--text); }
-.nav a.active { background: var(--surface-2); color: var(--accent); }
-.nav-icon { font-size: 1rem; width: 1.2rem; text-align: center; }
+.nav a:hover { color: var(--text); }
+.nav a.active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.nav-icon { font-size: 1.15rem; line-height: 1; }
 
 main {
   grid-area: main;
-  padding: 1.1rem;
+  padding: 14px;
+  /* Clear the floating tab bar, plus the home indicator under it. */
+  padding-bottom: calc(var(--tabbar) + 20px + env(safe-area-inset-bottom));
   display: grid;
-  gap: 1.1rem;
+  gap: 14px;
   align-content: start;
   max-width: 1100px;
   width: 100%;
+  min-width: 0;
 }
 
-[data-view] { display: grid; gap: 1.1rem; align-content: start; }
+[data-view] { display: grid; gap: 14px; align-content: start; min-width: 0; }
 
 @media (prefers-reduced-motion: no-preference) {
   .view-enter { animation: viewIn var(--dur) var(--ease); }
   @keyframes viewIn {
-    from { opacity: 0; transform: translateY(4px); }
+    from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: none; }
   }
-}
-
-@media (max-width: 899px) {
-  body { grid-template-columns: 1fr; grid-template-areas: "bar" "main"; }
-  .appbar { gap: .45rem; padding-inline: .75rem; }
-  .appbar h1 { font-size: .9rem; }
-  .chip { font-size: .7rem; padding: .22rem .5rem; }
-  .nav {
-    position: fixed;
-    inset: auto 0 0 0;
-    z-index: 20;
-    flex-direction: row;
-    justify-content: space-around;
-    border-right: 0;
-    border-top: 1px solid var(--border);
-    padding: .3rem .3rem calc(.3rem + env(safe-area-inset-bottom));
-  }
-  .nav a { flex-direction: column; gap: .15rem; font-size: .68rem; padding: .4rem .5rem; }
-  .nav-icon { font-size: 1.15rem; }
-  main { padding-bottom: calc(var(--tabbar) + 1.5rem); }
 }
 
 /* ---------------------------------------------------------------------- *
  * Cards & metrics
  * ---------------------------------------------------------------------- */
 .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 1rem 1.1rem;
-  box-shadow: var(--shadow-1);
+  padding: 16px;
 }
 
 h2 {
-  font-size: .78rem;
+  font-size: .74rem;
   text-transform: uppercase;
-  letter-spacing: .05em;
+  letter-spacing: .06em;
   color: var(--text-dim);
   margin: 0 0 .8rem;
   display: flex;
@@ -280,14 +387,17 @@ h2 {
 
 .grid {
   display: grid;
-  gap: 1rem;
+  gap: 14px;
   grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
 }
 .metric .label {
-  font-size: .7rem; text-transform: uppercase; letter-spacing: .05em;
+  font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
   color: var(--text-dim);
 }
-.metric .value { font-size: 1.6rem; font-weight: 650; margin-top: .15rem; }
+.metric .value {
+  font-size: 1.6rem; font-weight: 650; margin-top: .15rem;
+  letter-spacing: -.02em;
+}
 .metric .value.sm, .metric.sm .value { font-size: 1.15rem; }
 .metric .unit { font-size: .82rem; color: var(--text-dim); margin-left: .2rem; font-weight: 400; }
 
@@ -297,9 +407,9 @@ h2 {
 .booting .pstat,
 .booting #asState {
   color: transparent;
-  background: linear-gradient(90deg, var(--surface-2), var(--border), var(--surface-2));
+  background: linear-gradient(90deg, var(--fill-soft), var(--fill-hover), var(--fill-soft));
   background-size: 200% 100%;
-  border-radius: 5px;
+  border-radius: 6px;
   /* Sized to the eventual value, not to the "–" placeholder glyph, so the
      skeleton reads as a bar rather than a sliver. */
   display: inline-block;
@@ -321,7 +431,7 @@ h2 {
 
 .muted { color: var(--text-dim); font-size: .85rem; margin: .5rem 0 0; }
 .hint { font-size: .78rem; }
-.link { color: var(--accent); text-decoration: none; font-size: .85rem; }
+.link { color: var(--accent); text-decoration: none; font-size: .85rem; font-weight: 550; }
 .link:hover { text-decoration: underline; }
 .error { color: var(--crit); font-size: .82rem; }
 
@@ -332,28 +442,33 @@ h2 {
    width of its own buttons and clips them. */
 .controls {
   display: grid;
-  gap: .7rem;
+  gap: .55rem;
   grid-template-columns: repeat(auto-fit, minmax(272px, 1fr));
 }
+/* Two deliberate rows on a phone -- label and state, then the buttons across
+   the full width. Flex-wrapping got here on its own, but left the buttons
+   stranded against the right edge with a blank half-row beside them; stretched,
+   they are also the easiest thing on the page to hit in a hurry. */
 .ctl {
-  /* Wraps: on a phone the row ran off the right edge and clipped the Off
-     button, which is the one control you most need to reach in a hurry. */
-  display: flex; align-items: center; gap: .55rem;
-  flex-wrap: wrap;
-  padding: .6rem .8rem;
-  background: var(--surface-2);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: .5rem;
+  padding: .55rem .6rem;
+  background: var(--fill-soft);
   border-radius: var(--radius);
 }
-.ctl .name { font-weight: 600; flex: 1 1 8rem; min-width: 0; }
-.ctl .pstat { flex: 0 1 auto; min-width: 0; }
+.ctl .name { font-weight: 600; min-width: 0; }
+.ctl .pstat { justify-self: end; min-width: 0; }
 .ctl .name .muted { font-size: .76rem; margin: 0; display: block; }
-.ctl-actions { display: flex; gap: .35rem; flex: 0 0 auto; margin-left: auto; }
+.ctl-actions { grid-column: 1 / -1; display: flex; gap: .35rem; }
+.ctl-actions button { flex: 1; }
 
 .led {
   display: inline-block; width: 10px; height: 10px; border-radius: 50%;
   background: var(--text-dim); margin-right: .4rem; flex: 0 0 auto;
 }
-.led.on { background: var(--ok); box-shadow: 0 0 7px color-mix(in srgb, var(--ok) 60%, transparent); }
+.led.on { background: var(--ok); box-shadow: 0 0 8px color-mix(in srgb, var(--ok) 65%, transparent); }
 .led.off { background: var(--text-dim); }
 .led.warn { background: var(--warn); animation: pulse 1.2s infinite; }
 .led.crit { background: var(--crit); animation: pulse 1s infinite; }
@@ -369,19 +484,39 @@ h2 {
 
 button {
   font: inherit; font-weight: 600;
-  border: 0; border-radius: var(--radius);
-  padding: .42rem .8rem;
-  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  /* Height rather than vertical padding, so every button in a row lines up
+     and clears the 44px touch floor with its own margins around it. */
+  min-height: 40px;
+  padding: 0 .85rem;
+  background: var(--fill);
   color: var(--text);
   cursor: pointer;
-  transition: filter var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease), transform 120ms var(--ease);
 }
-button:hover:not(:disabled) { filter: brightness(1.15); }
+button:hover:not(:disabled) { background: var(--fill-hover); }
+/* Presses answer immediately -- the round trip to the station can take a
+   second, and a control that looks inert gets pressed twice. */
+button:active:not(:disabled) { transform: scale(.96); }
 button:disabled { opacity: .45; cursor: not-allowed; }
-button.on { background: var(--ok-bg); color: var(--ok); }
-button.off { background: var(--crit-bg); color: var(--crit); }
+button.on {
+  background: color-mix(in srgb, var(--ok) 20%, transparent);
+  color: var(--ok);
+}
+button.on:hover:not(:disabled) { background: color-mix(in srgb, var(--ok) 32%, transparent); }
+button.off {
+  background: color-mix(in srgb, var(--crit) 20%, transparent);
+  color: var(--crit);
+}
+button.off:hover:not(:disabled) { background: color-mix(in srgb, var(--crit) 32%, transparent); }
 button.primary { background: var(--accent); color: var(--bg); }
-button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
+button.ghost { background: transparent; border-color: var(--glass-edge); color: var(--text); }
+button.ghost:hover:not(:disabled) { background: var(--fill); }
+@media (prefers-reduced-motion: reduce) {
+  button:active:not(:disabled) { transform: none; }
+}
 
 /* ---------------------------------------------------------------------- *
  * Chart
@@ -392,8 +527,12 @@ button.ghost { background: transparent; border: 1px solid var(--border); color: 
 }
 .toolbar-right { margin-left: auto; display: flex; gap: .4rem; }
 .range { display: flex; gap: .3rem; flex-wrap: wrap; }
-.range button { background: var(--surface-2); font-size: .8rem; padding: .3rem .7rem; }
-.range button.active { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
+.range button { font-size: .8rem; padding: 0 .75rem; min-height: 36px; }
+.range button.active {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+}
+.toolbar-right button { font-size: .8rem; min-height: 36px; }
 #chartLive.active { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
 
 .chart-wrap { position: relative; }
@@ -405,17 +544,14 @@ button.ghost { background: transparent; border: 1px solid var(--border); color: 
   /* Without this the browser pans/zooms the page instead of the chart. */
   touch-action: none;
 }
-@media (min-width: 900px) { #chart { height: 320px; } }
 
 .chart-tip {
   position: absolute; top: 6px; pointer-events: none; display: none;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  background: var(--glass-strong);
+  border-radius: var(--radius-sm);
   padding: .5rem .6rem;
   font-size: .78rem;
   white-space: nowrap;
-  box-shadow: var(--shadow-2);
   z-index: 5;
 }
 .chart-tip-time { color: var(--text-dim); margin-bottom: .3rem; }
@@ -428,12 +564,15 @@ button.ghost { background: transparent; border: 1px solid var(--border); color: 
 .legend { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .7rem; }
 .legend-chip {
   display: inline-flex; align-items: center; gap: .35rem;
-  background: transparent; border: 1px solid var(--border);
-  border-radius: 999px; padding: .2rem .6rem;
+  background: var(--fill-soft); border: 1px solid var(--glass-edge);
+  border-radius: 999px; padding: .25rem .65rem;
   font-size: .76rem; font-weight: 550; color: var(--text);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), opacity var(--dur) var(--ease);
 }
+.legend-chip:hover { background: var(--fill); }
 .legend-chip i { width: 9px; height: 9px; border-radius: 2px; }
-.legend-chip.off { opacity: .4; }
+.legend-chip.off { opacity: .55; }
 
 /* ---------------------------------------------------------------------- *
  * Settings
@@ -441,19 +580,22 @@ button.ghost { background: transparent; border: 1px solid var(--border); color: 
 input[type=search], input[type=text], input[type=number], input[type=time],
 input[type=password], select {
   font: inherit;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  /* 16px, or iOS Safari zooms the page the moment the field takes focus. */
+  font-size: 16px;
+  background: var(--fill-soft);
+  border: 1px solid var(--glass-edge);
   color: var(--text);
-  border-radius: var(--radius);
-  padding: .4rem .55rem;
+  border-radius: var(--radius-sm);
+  min-height: 40px;
+  padding: .35rem .6rem;
 }
 input[type=search] { flex: 1; min-width: 0; }
 
 details.group summary {
   cursor: pointer;
-  font-size: .78rem;
+  font-size: .74rem;
   text-transform: uppercase;
-  letter-spacing: .05em;
+  letter-spacing: .06em;
   color: var(--text-dim);
   display: flex;
   align-items: center;
@@ -476,10 +618,10 @@ details.group[open] summary::before { transform: rotate(90deg); }
   display: flex; align-items: center; gap: .7rem;
   padding: .45rem .5rem;
   border-left: 2px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   flex-wrap: wrap;
 }
-.frow.dirty { border-left-color: var(--accent); background: var(--surface-2); }
+.frow.dirty { border-left-color: var(--accent); background: var(--fill-soft); }
 .frow.invalid { border-left-color: var(--crit); }
 /* :not(.switch) matters -- the toggle is itself a <label>, and `.frow label`
    would otherwise out-specify `.switch` and stretch it across the row. */
@@ -490,28 +632,33 @@ details.group[open] summary::before { transform: rotate(90deg); }
 
 .slider-combo { display: flex; align-items: center; gap: .6rem; flex: 0 0 auto; }
 .slider-combo input[type=range] { width: 140px; accent-color: var(--accent); }
-.slider-combo input[type=number] { width: 76px; }
+.slider-combo input[type=number] { width: 82px; }
 
-/* flex:0 0 auto, or the switch grows to fill the row. */
+/* iOS proportions (51x31), which are also the only ones that clear the touch
+   target floor. flex:0 0 auto, or the switch grows to fill the row. */
 .switch {
   position: relative; display: inline-block; flex: 0 0 auto;
-  width: 42px; height: 24px;
+  width: 51px; height: 31px;
 }
 .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
 .switch span {
   position: absolute; inset: 0; border-radius: 999px;
-  background: var(--surface-2); border: 1px solid var(--border);
-  transition: background var(--dur) var(--ease);
+  background: var(--fill); border: 1px solid var(--glass-edge);
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
   pointer-events: none;
 }
 .switch span::after {
-  content: ""; position: absolute; top: 3px; left: 3px;
-  width: 16px; height: 16px; border-radius: 50%;
-  background: var(--text-dim);
-  transition: transform var(--dur) var(--ease), background var(--dur) var(--ease);
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 25px; height: 25px; border-radius: 50%;
+  background: var(--knob);
+  box-shadow: var(--shadow-1);
+  transition: transform var(--dur) var(--ease);
 }
-.switch input:checked + span { background: var(--ok-bg); border-color: var(--ok); }
-.switch input:checked + span::after { transform: translateX(18px); background: var(--ok); }
+.switch input:checked + span {
+  background: color-mix(in srgb, var(--ok) 30%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 55%, transparent);
+}
+.switch input:checked + span::after { transform: translateX(20px); }
 .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .save-row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
@@ -521,32 +668,35 @@ label.inline { display: flex; align-items: center; gap: .4rem; font-size: .85rem
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(1rem + env(safe-area-inset-bottom));
+  /* Above the floating tab bar, not behind it. */
+  bottom: calc(var(--tabbar) + 12px + env(safe-area-inset-bottom));
   z-index: 30;
   display: flex; align-items: center; gap: 1rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--glass-strong);
   border-radius: 999px;
-  padding: .5rem .6rem .5rem 1.1rem;
-  box-shadow: var(--shadow-2);
+  padding: .45rem .5rem .45rem 1.1rem;
   font-size: .85rem;
+  max-width: calc(100vw - 24px);
 }
 .save-bar-actions { display: flex; gap: .4rem; }
-@media (max-width: 899px) { .save-bar { bottom: calc(var(--tabbar) + 1rem + env(safe-area-inset-bottom)); } }
 
 /* ---------------------------------------------------------------------- *
  * Dialog & toasts
  * ---------------------------------------------------------------------- */
 dialog {
-  border: 1px solid var(--border);
+  background: var(--glass-strong);
   border-radius: var(--radius-lg);
-  background: var(--surface);
   color: var(--text);
   padding: 1.2rem;
   max-width: min(94vw, 400px);
-  box-shadow: var(--shadow-2);
 }
-dialog::backdrop { background: rgba(0, 0, 0, .5); }
+/* Blur the page under the sheet as well, so the dialog reads as the only live
+   layer rather than a panel sitting on a dimmed screenshot. */
+dialog::backdrop {
+  background: rgba(0, 0, 0, .4);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
 dialog h2 { margin-top: 0; }
 dialog input[type=password] { width: 100%; margin: .6rem 0 .5rem; }
 dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; margin: 1rem 0 0; }
@@ -555,45 +705,31 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(1rem + env(safe-area-inset-bottom));
+  bottom: calc(var(--tabbar) + 12px + env(safe-area-inset-bottom));
   z-index: 40;
   display: flex; flex-direction: column; gap: .4rem; align-items: center;
   pointer-events: none;
 }
-@media (max-width: 899px) { #toasts { bottom: calc(var(--tabbar) + 1rem + env(safe-area-inset-bottom)); } }
 .toast {
   pointer-events: auto;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--glass-strong);
   color: var(--text);
   padding: .55rem 1rem;
   border-radius: 999px;
-  box-shadow: var(--shadow-2);
   font-size: .85rem;
   max-width: 90vw;
   cursor: pointer;
 }
-.toast-ok { border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
-.toast-error { border-color: color-mix(in srgb, var(--crit) 55%, transparent); }
+.toast-ok { border-color: color-mix(in srgb, var(--ok) 55%, transparent); }
+.toast-error { border-color: color-mix(in srgb, var(--crit) 65%, transparent); }
 @media (prefers-reduced-motion: no-preference) {
   .toast { animation: toastIn var(--dur) var(--ease); }
-  @keyframes toastIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; } }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(8px) scale(.96); } to { opacity: 1; } }
 }
 
 /* --------------------------------------------------------------------- */
 /* Power flow diagram                                                     */
 /* --------------------------------------------------------------------- */
-/* Two columns once there is room: the diagram earns the space, and the
-   controls beside it stop a wide screen being half empty. */
-.dash-grid { display: grid; gap: 16px; }
-.dash-side { display: grid; gap: 16px; align-content: start; }
-@media (min-width: 1080px) {
-  .dash-grid {
-    grid-template-columns: minmax(380px, 5fr) minmax(340px, 4fr);
-    align-items: start;
-  }
-}
-
 .flow-card { display: flex; flex-direction: column; align-items: center; }
 .flow { width: 100%; max-width: 400px; height: auto; }
 
@@ -606,7 +742,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
   width: 100%;
   margin-top: 8px;
   padding-top: 14px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--glass-edge);
 }
 .fs { display: flex; flex-direction: column; gap: 2px; min-width: 96px; }
 .fs-k {
@@ -616,7 +752,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
   letter-spacing: .06em;
   text-transform: uppercase;
 }
-.fs-v { color: var(--text); font-size: 18px; font-weight: 620; }
+.fs-v { color: var(--text); font-size: 18px; font-weight: 620; letter-spacing: -.01em; }
 .fs-v .unit { color: var(--text-dim); font-size: 12px; margin-left: 2px; }
 
 /* Wires. Colour carries which port; the name and watts beside every node
@@ -624,7 +760,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
 .wire {
   fill: none;
   transition: stroke var(--dur) var(--ease);
-  stroke: var(--border);
+  stroke: var(--ring);
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -644,36 +780,31 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
 #wUsb.active   { stroke: var(--c-usb); }
 
 /* Battery */
-.orb-well { fill: var(--surface-2); }
-.orb-ring { fill: none; stroke: var(--border); stroke-width: 2; }
+.orb-well { fill: var(--fill-soft); }
+.orb-ring { fill: none; stroke: var(--ring); stroke-width: 2; }
+/* Both labels sit over the fill once the battery is more than half full, and
+   at full strength the fill is close to the ink in every theme -- light green
+   under near-white in dark, dark green under near-black in light. Holding the
+   fill to a tint keeps the level readable as a level while leaving both labels
+   well clear of their contrast floor, which a halo could only fake. */
 .orb-fill {
   fill: var(--c-soc);
-  opacity: .9;
+  opacity: .42;
   /* `d` is animatable in Chromium/Safari and ignored elsewhere, so the level
      glides where it can and snaps where it cannot -- never a broken frame. */
   transition: d 400ms var(--ease), fill var(--dur) var(--ease);
 }
 .orb-fill.warn { fill: var(--warn); }
 .orb-fill.crit { fill: var(--crit); }
-/* Both labels sit over the fill once the battery is more than half full, and
-   in each theme the fill and the ink are close in lightness -- light green
-   under near-white in dark, dark green under near-black in light. Neither
-   ordering is legible, so carry a surface-coloured halo and let that do the
-   separating rather than picking an ink that loses in one theme or the other. */
 .orb-soc, .orb-sub {
-  paint-order: stroke fill;
-  stroke: var(--surface);
-  stroke-linejoin: round;
+  fill: var(--text);
   text-anchor: middle;
   dominant-baseline: middle;
 }
-.orb-soc {
-  fill: var(--text);
-  font-size: 30px;
-  font-weight: 650;
-  stroke-width: 4px;
-}
-.orb-sub { fill: var(--text-dim); font-size: 11px; stroke-width: 3px; }
+.orb-soc { font-size: 30px; font-weight: 650; letter-spacing: -.02em; }
+/* Full-strength ink, not --text-dim: over the fill the dim token drops under
+   3:1. Size and weight carry the hierarchy instead. */
+.orb-sub { font-size: 11px; font-weight: 500; }
 /* The auto-shutdown trigger level, so the headroom before a cut is visible. */
 .reserve {
   stroke: var(--text-dim);
@@ -685,8 +816,8 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
 
 /* Ports */
 .node {
-  fill: var(--surface-2);
-  stroke: var(--border);
+  fill: var(--fill-soft);
+  stroke: var(--ring);
   stroke-width: 2;
   transition: stroke var(--dur) var(--ease), stroke-width var(--dur) var(--ease);
 }
@@ -745,7 +876,8 @@ h2.sub { margin-top: 20px; }
   position: relative;
   height: 10px;
   border-radius: 999px;
-  background: var(--surface-2);
+  background: var(--fill-soft);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .18);
   overflow: hidden;
 }
 .meter-fill {
@@ -769,7 +901,7 @@ h2.sub { margin-top: 20px; }
   left: 50%;
   width: 2px;
   margin-left: -1px;
-  background: var(--border);
+  background: var(--glass-edge);
 }
 .meter-ends {
   display: flex;
@@ -781,4 +913,67 @@ h2.sub { margin-top: 20px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .meter-fill { transition: none; }
+}
+
+/* ---------------------------------------------------------------------- *
+ * Desktop. The single breakpoint: a side rail replaces the tab bar and the
+ * dashboard splits into two columns once the diagram has room to earn it.
+ * ---------------------------------------------------------------------- */
+@media (min-width: 900px) {
+  body {
+    grid-template-columns: var(--rail) minmax(0, 1fr);
+    grid-template-areas: "bar bar" "nav main";
+  }
+
+  .appbar { gap: .6rem; padding: 10px 18px; }
+  .appbar h1 { font-size: 1.05rem; }
+  .chip { min-height: 34px; font-size: .76rem; }
+  .icon-btn { min-width: 36px; min-height: 36px; }
+
+  .nav {
+    position: static;
+    inset: auto;
+    flex-direction: column;
+    gap: .15rem;
+    padding: 14px 10px;
+    border-radius: 0;
+    border-block: 0;
+    border-left: 0;
+    box-shadow: none;
+  }
+  .nav a {
+    flex: 0 0 auto;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: .7rem;
+    min-height: 40px;
+    padding: 0 .75rem;
+    border-radius: var(--radius-sm);
+    font-size: .9rem;
+    font-weight: 550;
+  }
+  .nav-icon { font-size: 1rem; width: 1.2rem; text-align: center; }
+
+  main { padding: 20px; padding-bottom: 32px; gap: 16px; }
+  [data-view] { gap: 16px; }
+
+  /* Room for one row again: label, state and buttons side by side. */
+  .ctl { grid-template-columns: 1fr auto auto; padding: .5rem .5rem .5rem .8rem; }
+  .ctl-actions { grid-column: auto; }
+  .ctl-actions button { flex: 0 0 auto; }
+
+  #chart { height: 320px; }
+
+  .save-bar, #toasts { bottom: calc(16px + env(safe-area-inset-bottom)); }
+}
+
+/* Two columns once there is room: the diagram earns the space, and the
+   controls beside it stop a wide screen being half empty. */
+.dash-grid { display: grid; gap: 16px; }
+.dash-side { display: grid; gap: 16px; align-content: start; }
+@media (min-width: 1080px) {
+  .dash-grid {
+    grid-template-columns: minmax(380px, 5fr) minmax(340px, 4fr);
+    align-items: start;
+  }
 }

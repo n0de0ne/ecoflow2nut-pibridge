@@ -3,7 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0f1115">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme: light)">
+<!-- Added to a phone's home screen this runs without browser chrome, drawing
+     under the status bar. That is what the safe-area insets in app.css are
+     there for; in a normal tab these are inert. -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="EcoFlow">
 <title>EcoFlow Bridge</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>&#9889;</text></svg>">
 <link rel="stylesheet" href="static/app.css">
@@ -54,10 +61,13 @@
         <!-- battery -->
         <circle class="orb-well" cx="180" cy="150" r="54"/>
         <clipPath id="orbClip"><circle cx="180" cy="150" r="54"/></clipPath>
+        <!-- The reserve marker is clipped with the fill: its ends are the orb's
+             full diameter, so anywhere but the centre it would otherwise poke
+             out either side of the circle. -->
         <g clip-path="url(#orbClip)">
           <path id="flowFill" class="orb-fill" d="M 126 204 H 234 V 204 H 126 Z"/>
+          <line id="flowReserve" class="reserve" x1="126" y1="204" x2="234" y2="204"/>
         </g>
-        <line id="flowReserve" class="reserve" x1="126" y1="204" x2="234" y2="204"/>
         <circle class="orb-ring" cx="180" cy="150" r="54"/>
         <text id="flowSoc" class="orb-soc" x="180" y="152">–</text>
         <text id="flowRemain" class="orb-sub" x="180" y="174">–</text>

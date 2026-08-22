@@ -537,10 +537,18 @@ ECOFLOW_WEB_TOKEN=somesecret ecoflow-nut --config config.yaml run
 ```
 
 The UI is a small single-page app with four tabs — a side rail on a desktop, a
-bottom tab bar on a phone. Each tab is a real link (`#/dashboard`, `#/history`,
+floating tab bar on a phone. Each tab is a real link (`#/dashboard`, `#/history`,
 `#/energy`, `#/settings`), so they can be bookmarked and the back button works.
 The published Docker image already includes the web + Postgres extras; just set
 `web.enabled: true` and expose port 8080.
+
+It is built phone-first: one column, 44px touch targets, and safe-area insets so
+nothing hides under a notch or a home indicator. The desktop rail is the single
+breakpoint on top of that. Surfaces are translucent and blur what scrolls behind
+them, over a fixed backdrop that gives the blur something to work on; where a
+browser has no `backdrop-filter` the surfaces fall back to opaque and the page is
+unchanged but flat. Add it to a phone's home screen and it runs without browser
+chrome, drawing under the status bar.
 
 **Dashboard** — SoC, AC in/out watts, USB/USB-C watts, status, runtime and
 charge/discharge estimates, with on/off buttons for **AC**, **USB** and **12V
