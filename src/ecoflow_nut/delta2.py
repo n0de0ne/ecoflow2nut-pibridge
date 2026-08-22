@@ -210,7 +210,10 @@ BMS_HEARTBEAT: Layout = (
     ("sys_ver", "I"),
     ("soc", "B"),
     ("vol", "I"),
-    ("amp", "I"),
+    # Signed: pack current runs negative while discharging, and read unsigned a
+    # discharge decodes as roughly 4.3 billion. Same four bytes either way, so
+    # the layout size is unchanged.
+    ("amp", "i"),
     ("temp", "B"),
     ("open_bms_idx", "B"),
     ("design_cap", "I"),
@@ -500,17 +503,29 @@ def _merge_bms(state: DeviceState, bms: dict[str, Any]) -> None:
     elif (v := bms.get("soc")) is not None:
         state.update_soc(float(v), "bms")
 
-    # The pack's own charge/discharge power, which beats inferring it from the
-    # ports: only one of the pair is non-zero at a time, so the difference is a
-    # signed figure straight from the BMS.
+    # Power at the pack, from its own volts and amps -- both in milli-units.
     #
-    # Watts rather than the `amp` field alongside them: pack current is signed
-    # in this protocol and the layout reads it unsigned, so a discharge would
-    # decode as roughly 4.3 billion. These two are magnitudes, so unsigned is
-    # right for them.
-    charge, discharge = bms.get("input_watts"), bms.get("output_watts")
-    if charge is not None or discharge is not None:
-        state.battery_watts = float(charge or 0.0) - float(discharge or 0.0)
+    # This is the honest figure, and it is a long way from what the ports imply.
+    # Captured on an E2000 taking solar: 326 W in and 214 W out of the station
+    # makes the arithmetic say +112 W, while the pack was drawing 52.8 V at
+    # 0.9 A -- about 46 W. The rest is conversion loss, and the arithmetic has
+    # no way to see it.
+    #
+    # Confirmed twice over from the same capture, rather than assumed:
+    # remain_cap/full_cap gives 92.4% against the 92.5% the device reports, and
+    # its own chg_remain_time of 206 minutes over the 2979 mAh still to fill
+    # implies 868 mA -- inside the 388..978 mA actually observed.
+    #
+    # The input_watts/output_watts pair sitting beside these is dead on this
+    # firmware: both read 0 throughout a capture where the battery was plainly
+    # charging. Kept only as a fallback for models that do fill them in.
+    vol_mv, amp_ma = bms.get("vol"), bms.get("amp")
+    if vol_mv is not None and amp_ma is not None:
+        state.battery_watts = round(float(vol_mv) * float(amp_ma) / 1e6, 1)
+    else:
+        charge, discharge = bms.get("input_watts"), bms.get("output_watts")
+        if charge is not None or discharge is not None:
+            state.battery_watts = float(charge or 0.0) - float(discharge or 0.0)
 
 
 def _merge_mppt(state: DeviceState, mppt: dict[str, Any]) -> None:

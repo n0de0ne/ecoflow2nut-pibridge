@@ -102,15 +102,16 @@ def test_every_element_lookup_has_a_matching_id(module: Path) -> None:
     )
 
 
-def test_a_dead_bms_field_does_not_pin_the_meter_to_zero() -> None:
-    """The E2000 sends the pack watt fields as a constant zero.
+def test_the_meter_prefers_the_measured_pack_reading() -> None:
+    """Zero from the BMS volts-and-amps is a real zero, so trust it as one.
 
-    Trusting "present" rather than "non-zero" made the meter read 0 W while a
-    105 W solar surplus was charging the battery and the station's own estimate
-    said "full in 7h 41m" -- the one reading the meter exists to get right.
+    The earlier guard tested truthiness, to dodge the dead input_watts field.
+    The driver no longer reads that field, so truthiness would now discard a
+    genuine idle pack and fall back to port arithmetic -- which on this station
+    reads +112 W where the battery is taking 46 W, and would claim charging
+    while nothing charges.
     """
     source = (STATIC / "views.js").read_text()
-    assert "if (s.battery_watts)" in source, (
-        "battery_watts must be trusted only when non-zero; `!= null` accepts a "
-        "field the firmware never fills in"
+    assert "if (s.battery_watts != null)" in source, (
+        "an idle pack reports 0 W and that is a real reading, not a missing one"
     )
