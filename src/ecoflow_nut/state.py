@@ -38,8 +38,14 @@ class DeviceState:
     # partial: a frame carrying only port 1 must not wipe what port 2 last
     # reported, so the totals are recomputed from last-known values rather than
     # from whatever happened to arrive.
+    #
+    # Four USB-A slots because the count is model-dependent: the DELTA 3 has two
+    # (both fast-charge), the DELTA 2 generation has four (two standard, two
+    # fast-charge). A model simply leaves the slots it does not have at None.
     usb_a1_watts: float | None = None
     usb_a2_watts: float | None = None
+    usb_a3_watts: float | None = None
+    usb_a4_watts: float | None = None
     usb_c1_watts: float | None = None
     usb_c2_watts: float | None = None
     dc_output_watts: float | None = None
@@ -74,6 +80,27 @@ class DeviceState:
         ``nut_writer.derive_status``).
         """
         return self.soc_percent is not None
+
+    def recompute_usb_totals(self) -> None:
+        """Re-sum the USB-A and USB-C totals from the per-port readings.
+
+        Sum last-known values rather than only what the current frame carried,
+        so a partial frame cannot zero a port it simply did not mention. Each
+        total stays None until at least one port of that type has been seen, so
+        "not reported" reads differently from "reported zero".
+        """
+        usb_a = (
+            self.usb_a1_watts,
+            self.usb_a2_watts,
+            self.usb_a3_watts,
+            self.usb_a4_watts,
+        )
+        for total, ports in (
+            ("usb_output_watts", usb_a),
+            ("usbc_output_watts", (self.usb_c1_watts, self.usb_c2_watts)),
+        ):
+            if any(p is not None for p in ports):
+                setattr(self, total, round(sum(p or 0.0 for p in ports), 1))
 
     def update_soc(self, value: float, source: str) -> None:
         """Set SoC from ``source``, unless a more trusted source already has.

@@ -58,8 +58,13 @@ settings_file: "/var/lib/ecoflow-nut/settings.json"
 
 # Web dashboard (live telemetry + control). Set enabled: true and restart, then
 # open http://<pi-ip>:8080. aiohttp is already installed by systemd/install.sh.
-# Without an auth_token the dashboard is read-only -- viewing needs no secret,
-# but toggling outputs does. Prefer the ECOFLOW_WEB_TOKEN env var over this file.
+#
+# auth_token is what turns the control buttons on. Leave it empty and the
+# dashboard is read-only -- it will say so under the port controls -- because
+# anything that can cut your AC bank should need a secret. Generate one with
+#   openssl rand -hex 16
+# and prefer the ECOFLOW_WEB_TOKEN env var (a systemd drop-in) over this file,
+# which is world-readable in /etc.
 web:
   enabled: false
   host: "0.0.0.0"
@@ -88,3 +93,34 @@ auto_shutdown:
   cut_usb: false
   cut_dc: false
   restore_on_recovery: false
+
+# Optional downstream HomeKit-over-BLE outlet (e.g. an Eve Energy). Lets the
+# bridge cut ONE load -- a server, say -- while the E2000's other AC sockets
+# stay powered, which its own all-or-nothing AC bank cannot do. Enabling this
+# adds the outlet's On/Off tile to the dashboard.
+#
+# Pair it once before enabling (reset the outlet and remove it from Apple Home
+# first -- the bridge becomes its sole controller):
+#   ecoflow-nut --config config.yaml eve discover   # -> device_id
+#   ecoflow-nut --config config.yaml eve pair       # -> writes pairing_file
+#
+# adapter: prefer a SECOND BT dongle. The E2000 link is persistent and its
+# watchdog reconnects on a stall, so an Eve toggle sharing hci0 can cost you
+# telemetry. If you only have one radio, hci0 works -- expect a brief blip.
+eve:
+  enabled: false
+  device_id: ""                 # HomeKit accessory id (from 'eve discover')
+  adapter: "hci1"
+  pairing_file: "/var/lib/ecoflow-nut/eve-pairing.json"
+  setup_code: ""                # 8-digit HomeKit code, e.g. "123-45-678" (pairing only)
+  connect_timeout_seconds: 30
+
+# Optional SwitchBot Bot (mechanical button pusher) for a server's power button.
+# MANUAL ONLY -- it adds a "Press" button to the dashboard and is deliberately
+# NOT wired to auto-shutdown, since a power button is a toggle and an automated
+# press could shut down a server that had already booted back up.
+switchbot:
+  enabled: false
+  mac: ""                       # BLE MAC of the Bot (from 'switchbot scan')
+  adapter: "hci0"               # on-demand connect; brief blip on a shared radio
+  connect_timeout_seconds: 20

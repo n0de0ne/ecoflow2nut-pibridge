@@ -183,8 +183,8 @@ def _merge_usb(state: DeviceState, fields: dict[int, Any]) -> None:
     """Update the per-port USB readings, then recompute the two totals.
 
     Ports report negative watts (as AC output does); we expose the load as a
-    positive number. Totals are summed from last-known per-port values so a
-    partial frame cannot zero a port it simply did not mention.
+    positive number. The DELTA 3's two USB-A ports are both fast-charge, so
+    they take the first two of the state's four USB-A slots.
     """
     for number, attr in (
         (F_POW_GET_QCUSB1, "usb_a1_watts"),
@@ -194,15 +194,7 @@ def _merge_usb(state: DeviceState, fields: dict[int, Any]) -> None:
     ):
         if (v := fields.get(number)) is not None:
             setattr(state, attr, round(abs(float(v)), 1))
-
-    for total, ports in (
-        ("usb_output_watts", (state.usb_a1_watts, state.usb_a2_watts)),
-        ("usbc_output_watts", (state.usb_c1_watts, state.usb_c2_watts)),
-    ):
-        # Stay None until at least one port of that type has been seen, so
-        # "not reported" reads differently from "reported zero".
-        if any(p is not None for p in ports):
-            setattr(state, total, round(sum(p or 0.0 for p in ports), 1))
+    state.recompute_usb_totals()
 
 
 def is_display_packet(packet: Packet) -> bool:

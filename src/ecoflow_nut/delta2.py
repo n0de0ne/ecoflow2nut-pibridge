@@ -391,10 +391,7 @@ class Delta2Driver:
             state.input_watts = float(v)
         if (v := pd.get("watts_out_sum")) is not None:
             state.output_watts = float(v)
-        if (v := pd.get("usb1_watt")) is not None:
-            state.usb_output_watts = float(v)
-        if (v := pd.get("typec1_watts")) is not None:
-            state.usbc_output_watts = float(v)
+        _merge_pd_ports(state, pd)
         if (v := pd.get("soc")) is not None:
             state.update_soc(float(v), "pd")
         if self.ac_watts_from_pd:
@@ -437,6 +434,35 @@ class Delta2Driver:
             payload=payload,
             version=PACKET_VERSION,
         )
+
+
+def _merge_pd_ports(state: DeviceState, pd: dict[str, Any]) -> None:
+    """Update the USB and 12V DC port readings from a PD heartbeat.
+
+    This generation has six USB ports, not the DELTA 3's four: two standard
+    USB-A, two fast-charge USB-A and two USB-C. Reading only the first of each
+    kind -- as this driver first did -- reports 0 W for anything charging on,
+    say, the second USB-C port, which is the one most people reach for.
+
+    The 12V DC port is EcoFlow's "car" port throughout this protocol, so its
+    switch and its draw arrive under those names.
+    """
+    for field, attr in (
+        ("usb1_watt", "usb_a1_watts"),
+        ("usb2_watt", "usb_a2_watts"),
+        ("qc_usb1_watt", "usb_a3_watts"),
+        ("qc_usb2_watt", "usb_a4_watts"),
+        ("typec1_watts", "usb_c1_watts"),
+        ("typec2_watts", "usb_c2_watts"),
+    ):
+        if (v := pd.get(field)) is not None:
+            setattr(state, attr, float(v))
+    state.recompute_usb_totals()
+
+    if (v := pd.get("car_watts")) is not None:
+        state.dc_output_watts = float(v)
+    if (v := pd.get("dc_out_state")) is not None:
+        state.dc_output_on = bool(v)
 
 
 def _merge_ems(state: DeviceState, ems: dict[str, Any]) -> None:

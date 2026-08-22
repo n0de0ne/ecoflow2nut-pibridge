@@ -127,6 +127,67 @@ def test_pd_heartbeat_sets_totals_and_port_watts():
     assert state.usbc_output_watts == pytest.approx(45)
 
 
+def test_pd_heartbeat_counts_every_usb_port():
+    """Six ports on this generation, not the DELTA 3's four.
+
+    Reading only the first USB-A and the first USB-C reports 0 W for anything
+    charging on the second USB-C -- the port most people reach for.
+    """
+    payload = rawstruct.pack(
+        delta2.PD_DELTA2_MAX,
+        {
+            "usb1_watt": 5,
+            "usb2_watt": 7,
+            "qc_usb1_watt": 18,
+            "qc_usb2_watt": 12,
+            "typec1_watts": 45,
+            "typec2_watts": 60,
+        },
+    )
+    state = DeviceState()
+    assert delta2.DELTA2_MAX.handle_packet(state, _frame(0x02, 0x02, payload))
+    assert state.usb_output_watts == pytest.approx(5 + 7 + 18 + 12)
+    assert state.usbc_output_watts == pytest.approx(45 + 60)
+
+
+def test_pd_heartbeat_reports_the_12v_dc_port():
+    """The 12V port is EcoFlow's "car" port throughout this protocol.
+
+    Without these the dashboard's DC tile never leaves "?", so pressing its
+    On/Off buttons gives no feedback that anything happened.
+    """
+    payload = rawstruct.pack(delta2.PD_DELTA2_MAX, {"dc_out_state": 1, "car_watts": 84})
+    state = DeviceState()
+    assert delta2.DELTA2_MAX.handle_packet(state, _frame(0x02, 0x02, payload))
+    assert state.dc_output_on is True
+    assert state.dc_output_watts == pytest.approx(84)
+
+    off = rawstruct.pack(delta2.PD_DELTA2_MAX, {"dc_out_state": 0, "car_watts": 0})
+    assert delta2.DELTA2_MAX.handle_packet(state, _frame(0x02, 0x02, off))
+    assert state.dc_output_on is False
+    assert state.dc_output_watts == pytest.approx(0)
+
+
+def test_a_partial_pd_frame_does_not_zero_an_unmentioned_usb_port():
+    """Frames are partial; totals come from last-known values, not this frame."""
+    state = DeviceState()
+    first = rawstruct.pack(delta2.PD_DELTA2_MAX, {"typec1_watts": 45, "typec2_watts": 60})
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x02, 0x02, first))
+    assert state.usbc_output_watts == pytest.approx(105)
+
+    # A frame too short to reach typec2 must leave that port's last reading be.
+    short_of_typec2 = delta2.PD_BASE[: _index_of(delta2.PD_BASE, "typec2_watts")]
+    truncated = rawstruct.pack(delta2.PD_DELTA2_MAX, {"typec1_watts": 30})
+    cut = truncated[: rawstruct.size_of(short_of_typec2)]
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x02, 0x02, cut))
+    assert state.usb_c2_watts == pytest.approx(60), "port 2 was never mentioned"
+    assert state.usbc_output_watts == pytest.approx(90)
+
+
+def _index_of(layout, name: str) -> int:
+    return next(i for i, (field, _) in enumerate(layout) if field == name)
+
+
 def test_delta2_reads_ac_watts_from_pd_but_delta2max_does_not():
     """The two models report AC power from different subsystems."""
     payload = rawstruct.pack(

@@ -34,25 +34,29 @@ function setPort(id, kind, text, title) {
 }
 
 /** Each port reports a real flow flag; watts are shown alongside when drawing. */
-function portState(on, watts, awaiting) {
-  if (on == null) return ["unknown", "?", awaiting];
+function portState(on, watts, unknownNote) {
   const w = Math.round(watts ?? 0);
+  // Not every model reports a switch state for every port -- the DELTA 2
+  // generation sends no USB flag at all. Keep the LED honestly unknown rather
+  // than inferring one, but still show a draw we do know about: "? · 12W" is
+  // far more use than a bare "?" that reads like a broken tile.
+  if (on == null) return ["unknown", w > 0 ? `? · ${w}W` : "?", unknownNote];
   if (!on) return ["off", "OFF", ""];
   return ["on", w > 0 ? `ON · ${w}W` : "ON · idle", ""];
 }
 
 function renderPorts(s) {
-  // Every port has a decoded flow_info flag, so these are the device's own
-  // states, not inferences from power draw.
+  // Where a port has a decoded flow flag these are the device's own states,
+  // never inferences from power draw.
   setPort("stAc", ...portState(s.ac_output_on, s.ac_output_watts,
-    "Awaiting the AC-output flag from the device."));
+    "The device has not reported an AC-output state."));
 
   const usbW = (s.usb_output_watts ?? 0) + (s.usbc_output_watts ?? 0);
   setPort("stUsb", ...portState(s.usb_output_on, usbW,
-    "Awaiting the USB flow flag from the device."));
+    "The device has not reported a USB switch state. The On/Off buttons still work."));
 
   setPort("stDc", ...portState(s.dc_output_on, s.dc_output_watts,
-    "Awaiting the 12V DC flow flag from the device."));
+    "The device has not reported a 12V DC state."));
 
   el("#eveCtl").hidden = s.eve_enabled !== true;
   if (s.eve_enabled === true) {
