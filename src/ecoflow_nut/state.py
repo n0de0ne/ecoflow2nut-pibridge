@@ -111,6 +111,20 @@ class DeviceState:
     charge_limit_percent: int | None = None
     discharge_limit_percent: int | None = None
     ac_charge_watts: int | None = None
+    # The station's own reserve level (%): on mains it holds the pack here so
+    # there is something left for an outage. A station sitting at 90% with no
+    # charge limit set is usually obeying this, not misbehaving.
+    backup_reserve_percent: int | None = None
+
+    # -- lifetime energy counters (Wh) -------------------------------------- #
+    # Odometers the station keeps itself, so they survive a bridge restart and
+    # need no integration on our side. Home Assistant's Energy dashboard wants
+    # exactly this shape -- a monotonic total, not a power reading it has to
+    # integrate -- which is what makes solar-vs-grid attribution work there.
+    solar_energy_wh: int | None = None
+    grid_energy_wh: int | None = None
+    ac_output_energy_wh: int | None = None
+    dc_output_energy_wh: int | None = None
 
     @property
     def is_complete(self) -> bool:

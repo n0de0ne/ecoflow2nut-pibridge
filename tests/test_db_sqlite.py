@@ -443,7 +443,11 @@ async def test_mains_draw_is_still_billed(tmp_path: Path) -> None:
         store._conn.commit()  # type: ignore[union-attr]
 
         series = await store.energy_series("ecoflow", minutes=120, bucket_width=600)
-        money = compute_energy(series, 600, PricingConfig(enabled=True, price_hp=0.25))
+        # Both windows priced: the samples are stamped off the wall clock, so a
+        # run between 22:00 and 06:00 puts every bucket in HC -- and with the
+        # default 0/kWh there the bill was zero and this failed, nightly.
+        pricing = PricingConfig(enabled=True, price_hc=0.15, price_hp=0.25)
+        money = compute_energy(series, 600, pricing)
         assert money["grid_kwh"] == pytest.approx(0.6, abs=0.01), "600 W for an hour"
         assert money["total_cost"] > 0
     finally:
@@ -481,7 +485,10 @@ async def test_solar_reaches_the_savings_figure(tmp_path: Path) -> None:
         series = await store.energy_series("ecoflow", minutes=120, bucket_width=600)
         assert all(row["solar_w"] == pytest.approx(500.0) for row in series)
 
-        money = compute_energy(series, 600, PricingConfig(enabled=True, price_hp=0.20))
+        # Priced in both windows, or an overnight run values the harvest at the
+        # default 0/kWh and "the sun did the work" reads as zero.
+        pricing = PricingConfig(enabled=True, price_hc=0.12, price_hp=0.20)
+        money = compute_energy(series, 600, pricing)
         assert money["total_cost"] == 0.0, "nothing was bought"
         assert money["solar_savings"] > 0, "but the sun did the work"
         assert money["net_saving"] == pytest.approx(money["load_cost"])

@@ -701,3 +701,41 @@ def test_battery_watts_stays_unset_when_the_pack_does_not_report_it():
     cut = rawstruct.pack(delta2.BMS_HEARTBEAT, {"soc": 55})[: rawstruct.size_of(short)]
     delta2.DELTA2_MAX.handle_packet(state, _frame(0x03, 0x32, cut))
     assert state.battery_watts is None
+
+
+def test_lifetime_energy_counters_are_read_from_the_pd_frame():
+    """Odometers the station owns, which is what makes them useful to HA.
+
+    Confirmed as Wh from the capture rather than assumed: dc_chg_power over its
+    own dc_in_used_time is a 231 W average, and ac_dsg_power over inv_used_time
+    is 174 W against a load measuring 213 W at that moment.
+    """
+    state = DeviceState()
+    payload = rawstruct.pack(
+        delta2.PD_DELTA2_MAX,
+        {
+            "dc_chg_power": 2398, "sun_chg_power": 0, "ac_chg_power": 4642,
+            "ac_dsg_power": 4457, "dc_dsg_power": 20, "bp_power_soc": 90,
+        },
+    )
+    assert delta2.DELTA2_MAX.handle_packet(state, _frame(0x02, 0x02, payload))
+
+    assert state.solar_energy_wh == 2398
+    assert state.grid_energy_wh == 4642
+    assert state.ac_output_energy_wh == 4457
+    assert state.dc_output_energy_wh == 20
+    assert state.backup_reserve_percent == 90
+
+
+def test_solar_energy_sums_both_input_names():
+    """This firmware books the XT60 harvest under dc_chg_power and leaves
+    sun_chg_power at zero; other units in the family use the solar name. They
+    count disjoint sources through the same connector, so the sum is right on
+    either -- and picking one name would read zero solar on half the family.
+    """
+    state = DeviceState()
+    payload = rawstruct.pack(
+        delta2.PD_DELTA2_MAX, {"sun_chg_power": 1500, "dc_chg_power": 0}
+    )
+    delta2.DELTA2_MAX.handle_packet(state, _frame(0x02, 0x02, payload))
+    assert state.solar_energy_wh == 1500

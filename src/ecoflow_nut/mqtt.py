@@ -136,6 +136,40 @@ SENSORS: tuple[dict[str, Any], ...] = (
         device_class="voltage",
         icon="mdi:battery-alert-variant-outline",
     ),
+    # Lifetime energy, for HA's Energy dashboard. device_class "energy" plus
+    # state_class "total_increasing" is the exact pair the dashboard requires:
+    # it wants a monotonic total it can difference, not a power reading it has
+    # to integrate -- an integration would only count the hours HA was up and
+    # listening, and would restart from zero whenever the helper was recreated.
+    # These odometers live on the station, so a bridge restart costs nothing.
+    _sensor(
+        "solar_energy_wh",
+        "Solar energy",
+        unit="Wh",
+        device_class="energy",
+        state_class="total_increasing",
+    ),
+    _sensor(
+        "grid_energy_wh",
+        "Grid energy in",
+        unit="Wh",
+        device_class="energy",
+        state_class="total_increasing",
+    ),
+    _sensor(
+        "ac_output_energy_wh",
+        "AC output energy",
+        unit="Wh",
+        device_class="energy",
+        state_class="total_increasing",
+    ),
+    _sensor(
+        "dc_output_energy_wh",
+        "12V DC output energy",
+        unit="Wh",
+        device_class="energy",
+        state_class="total_increasing",
+    ),
 )
 
 BINARY_SENSORS: tuple[dict[str, Any], ...] = (

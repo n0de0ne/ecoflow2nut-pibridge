@@ -340,6 +340,12 @@ function renderHealth(s) {
   if (s.charge_limit_percent != null && s.charge_limit_percent < 100) {
     parts.push(`charges to ${s.charge_limit_percent}%`);
   }
+  // The reserve is the usual reason a pack sits below full on mains, and it is
+  // a different setting from the charge limit -- reporting only the limit says
+  // "no limit set" beside a station that is plainly holding at 90%.
+  if (s.backup_reserve_percent) {
+    parts.push(`holds ${s.backup_reserve_percent}% in reserve`);
+  }
   if (s.discharge_limit_percent) {
     parts.push(`stops discharging at ${s.discharge_limit_percent}%`);
   }

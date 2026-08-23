@@ -401,6 +401,13 @@ class Daemon:
             "charge_limit_percent": s.charge_limit_percent,
             "discharge_limit_percent": s.discharge_limit_percent,
             "ac_charge_watts": s.ac_charge_watts,
+            "backup_reserve_percent": s.backup_reserve_percent,
+            # Lifetime Wh odometers, straight from the station. These are what
+            # Home Assistant's Energy dashboard consumes.
+            "solar_energy_wh": s.solar_energy_wh,
+            "grid_energy_wh": s.grid_energy_wh,
+            "ac_output_energy_wh": s.ac_output_energy_wh,
+            "dc_output_energy_wh": s.dc_output_energy_wh,
             "status": self._latest_status,
             "runtime_seconds": self._latest_runtime,
             "updated_seconds_ago": age,

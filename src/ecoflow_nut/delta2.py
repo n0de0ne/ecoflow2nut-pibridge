@@ -398,8 +398,13 @@ class Delta2Driver:
         if (v := pd.get("watts_out_sum")) is not None:
             state.output_watts = float(v)
         _merge_pd_ports(state, pd)
+        _merge_pd_energy(state, pd)
         if (v := pd.get("soc")) is not None:
             state.update_soc(float(v), "pd")
+        # The reserve the station holds for an outage. Distinct from the EMS
+        # charge limit and far more often the reason a pack sits below full.
+        if (v := pd.get("bp_power_soc")) is not None:
+            state.backup_reserve_percent = int(v)
         if self.ac_watts_from_pd:
             if (v := pd.get("ac_input_watts")) is not None:
                 state.ac_input_watts = float(v)
@@ -440,6 +445,37 @@ class Delta2Driver:
             payload=payload,
             version=PACKET_VERSION,
         )
+
+
+def _merge_pd_energy(state: DeviceState, pd: dict[str, Any]) -> None:
+    """Lifetime Wh odometers the station keeps for each input and output.
+
+    Monotonic and owned by the device, so they survive a bridge restart and
+    need no integration here -- which is precisely the shape Home Assistant's
+    Energy dashboard asks for. Feeding it live watts instead would make the
+    totals depend on HA being up to see them.
+
+    Confirmed as Wh from the capture rather than assumed: dc_chg_power 2398 Wh
+    over the 10.4 h its own dc_in_used_time reports is a 231 W average, and
+    ac_dsg_power 4457 Wh over 25.6 h of inv_used_time is 174 W -- against a
+    load measuring 213 W at that moment.
+
+    Solar is the sum of both input names on purpose. This firmware books the
+    XT60 harvest under ``dc_chg_power`` and leaves ``sun_chg_power`` at zero
+    with ``mppt_used_time`` at zero beside it, while other units in the family
+    use the solar name. The two count disjoint sources through the same
+    physical connector, so summing is right on either firmware.
+    """
+    solar = [pd.get("sun_chg_power"), pd.get("dc_chg_power")]
+    if any(v is not None for v in solar):
+        state.solar_energy_wh = sum(int(v or 0) for v in solar)
+    for field, attr in (
+        ("ac_chg_power", "grid_energy_wh"),
+        ("ac_dsg_power", "ac_output_energy_wh"),
+        ("dc_dsg_power", "dc_output_energy_wh"),
+    ):
+        if (v := pd.get(field)) is not None:
+            setattr(state, attr, int(v))
 
 
 def _merge_pd_ports(state: DeviceState, pd: dict[str, Any]) -> None:

@@ -784,6 +784,69 @@ values are also editable live from the web UI's Settings panel.
 > there is no per-day price history, so a mid-history tariff change re-prices all
 > past days at the new rate.)
 
+### Home Assistant (MQTT discovery)
+
+Point the bridge at your broker and every sensor, binary sensor and switch
+appears in HA as one device. No YAML on the HA side — discovery does it.
+
+```yaml
+mqtt:
+  enabled: true
+  host: "10.0.1.50"           # your HA / Mosquitto host
+  port: 1883
+  username: "ecoflow"
+  base_topic: "ecoflow"
+  discovery_prefix: "homeassistant"
+  device_id: ""               # defaults to nut.device_name; unique per station
+```
+
+```bash
+pip install "ecoflow-nut-bridge[mqtt]"   # systemd/install.sh already does this
+```
+
+Put the password in `ECOFLOW_MQTT_PASSWORD` (a systemd drop-in) rather than in
+`config.yaml`, which is world-readable in `/etc`.
+
+Everything is published as one retained JSON message per update on
+`<base_topic>/<device_id>/state`, with each entity reading it through a
+`value_template` — so a reading costs one message rather than one per entity,
+and HA sees current values the instant it subscribes. Availability is a
+retained last-will, so HA marks the device unavailable if the bridge dies
+rather than showing a frozen reading forever.
+
+#### Attributing your homelab's consumption to solar vs grid
+
+The Energy dashboard wants **cumulative energy**, not power it has to
+integrate. The bridge publishes the station's own lifetime Wh odometers for
+exactly this — `device_class: energy` with `state_class: total_increasing`:
+
+| Entity | Maps to |
+|---|---|
+| **Solar energy** | Energy dashboard → *Solar panels* → "Solar production energy" |
+| **Grid energy in** | → *Grid consumption* |
+| **AC output energy** | → *Individual devices*, to see what the homelab drew |
+
+Settings → Dashboards → Energy, then add each in the matching slot. HA does
+the solar-vs-grid split from there, and because these counters live on the
+station rather than in HA, they survive a bridge restart, an HA restart and
+any gap between the two. An integration helper over `Solar input` (watts)
+would only count the hours HA happened to be up and listening.
+
+Two caveats specific to this generation:
+
+* Solar is the **XT60 input**, which is also the car/DC charging input. If you
+  ever charge from a car socket through the same connector it lands in the
+  same counter. On this firmware `sun_chg_power` stays 0 and the harvest is
+  booked under `dc_chg_power`, so the bridge sums both names (see
+  [`docs/PROTOCOL.md`](docs/PROTOCOL.md)).
+* **AC output energy is what left the station**, not what the grid supplied —
+  between the two sit the battery and the inverter. Over a day it converges;
+  over an hour it will not.
+
+The bridge's own Energy page answers a narrower question — the solar/grid
+split of what came *in* over a chosen window, priced against your HC/HP
+tariff. HA's Energy dashboard is the better home for long-run attribution.
+
 ## 7. NUT client setup
 
 ### Unraid (built-in NUT client)
