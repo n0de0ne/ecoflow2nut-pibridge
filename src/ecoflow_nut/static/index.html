@@ -223,22 +223,23 @@
         <div class="metric sm"><div class="label">Projected</div>
           <div class="value"><span id="eProj">–</span></div></div>
       </div>
-      <h2 class="sub">Where the energy came from</h2>
+      <h2 class="sub">Where the energy came from
+        <span class="h2-total" id="mixTotal"></span></h2>
       <div class="share">
         <div class="share-bar" id="mixBar" role="img" aria-label="Energy mix">
-          <span class="share-seg seg-solar" id="mixSolar" hidden></span>
-          <span class="share-seg seg-grid" id="mixGrid" hidden></span>
+          <span class="share-seg seg-solar" id="mixSolar" hidden><b id="mixSolarBar"></b></span>
+          <span class="share-seg seg-grid" id="mixGrid" hidden><b id="mixGridBar"></b></span>
         </div>
         <div class="share-keys">
           <div class="share-key">
-            <i class="seg-solar"></i><span class="share-k">Solar</span>
-            <b class="share-v" id="mixSolarPct">–</b>
-            <span class="share-sub" id="mixSolarKwh">–</span>
+            <div class="share-head"><i class="seg-solar"></i><span class="share-k">Solar</span></div>
+            <div class="share-v"><span id="mixSolarKwh">–</span><span
+              class="share-sub" id="mixSolarPct">–</span></div>
           </div>
           <div class="share-key">
-            <i class="seg-grid"></i><span class="share-k">Grid</span>
-            <b class="share-v" id="mixGridPct">–</b>
-            <span class="share-sub" id="mixGridKwh">–</span>
+            <div class="share-head"><i class="seg-grid"></i><span class="share-k">Grid</span></div>
+            <div class="share-v"><span id="mixGridKwh">–</span><span
+              class="share-sub" id="mixGridPct">–</span></div>
           </div>
         </div>
         <p class="muted hint" id="mixNote">What came in, not what powered the
@@ -255,8 +256,6 @@
           <div class="value"><span id="eNetSaving">–</span></div>
           <div class="hint">Load cost minus what was actually bought — solar and
             off-peak charging together.</div></div>
-        <div class="metric sm"><div class="label">Solar harvested</div>
-          <div class="value"><span id="eSolarKwh">–</span><span class="unit">kWh</span></div></div>
         <div class="metric sm"><div class="label">Solar value</div>
           <div class="value"><span id="eSolarSaving">–</span></div>
           <div class="hint">Harvest at the tariff it displaced. Approximate:

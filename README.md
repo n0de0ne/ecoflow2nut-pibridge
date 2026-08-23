@@ -608,8 +608,9 @@ follows the same window as the chart, so zooming into last Tuesday costs last
 Tuesday. See [Pricing](#electricity-pricing).
 
 *Where the energy came from* splits everything that came **in** across solar and
-grid, as one stacked bar with both percentages and both kWh figures. It is a
-share of input, not of what the load drew — between the two sits the battery,
+grid. The kWh is the headline — on the bar itself where a segment is wide
+enough to hold it, and again under each key with the percentage beside it. It
+is a share of input, not of what the load drew — between the two sits the battery,
 whose own level moves over the window. On a station that reports no PV at all the
 split reads `–` rather than "100% grid": a station with no solar sensor is not
 the same as one that harvested nothing, and only the second supports the claim.

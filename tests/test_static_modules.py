@@ -116,6 +116,18 @@ def test_the_share_bar_sizes_itself_from_the_raw_shares() -> None:
     assert "solarSeg.hidden = !known || solar <= 0;" in source
 
 
+def test_the_bar_is_labelled_in_kwh_not_percent() -> None:
+    """The question the block answers is how much energy, not what fraction.
+
+    The percentage is the secondary figure -- it sits beside the kWh in the
+    keys. Putting it on the mark instead leaves the amount readable only by
+    looking away from the bar, which is what made the block unclear.
+    """
+    source = (STATIC / "views.js").read_text()
+    assert 'el("#mixSolarBar").textContent = known && solar >= ROOM_FOR_A_LABEL' in source
+    assert "? solarKwh :" in source, "the on-mark label is the kWh"
+
+
 def test_the_two_shares_are_labelled_as_one_split() -> None:
     """Rounding each independently prints 51% beside 50%."""
     source = (STATIC / "views.js").read_text()

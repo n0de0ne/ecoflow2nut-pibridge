@@ -639,14 +639,25 @@ function renderMix(d) {
   gridSeg.style.flexGrow = known ? grid * 100 : 0;
   bar.classList.toggle("unknown", !known);
 
+  const solarKwh = `${(d.solar_kwh ?? 0).toFixed(2)} kWh`;
+  const gridKwh = `${(d.grid_kwh ?? 0).toFixed(2)} kWh`;
   el("#mixSolarPct").textContent = solarLabel;
   el("#mixGridPct").textContent = gridLabel;
-  el("#mixSolarKwh").textContent = `${(d.solar_kwh ?? 0).toFixed(2)} kWh`;
-  el("#mixGridKwh").textContent = `${(d.grid_kwh ?? 0).toFixed(2)} kWh`;
+  el("#mixSolarKwh").textContent = known ? solarKwh : "–";
+  el("#mixGridKwh").textContent = known ? gridKwh : "–";
+  el("#mixTotal").textContent = known ? `${(d.input_kwh ?? 0).toFixed(2)} kWh in` : "";
+
+  // The kWh goes on the mark itself, which is the figure being asked for and
+  // saves a glance down to the key. Only where the segment can hold it: below
+  // this it clips to something like "2.3 k", and a truncated number is worse
+  // than none. The keys underneath always carry both figures in full.
+  const ROOM_FOR_A_LABEL = 0.18;
+  el("#mixSolarBar").textContent = known && solar >= ROOM_FOR_A_LABEL ? solarKwh : "";
+  el("#mixGridBar").textContent = known && grid >= ROOM_FOR_A_LABEL ? gridKwh : "";
 
   bar.setAttribute("aria-label", known
-    ? `Energy in: ${solarLabel} solar, ${gridLabel} grid, ` +
-      `${(d.input_kwh ?? 0).toFixed(2)} kWh total.`
+    ? `Energy in: ${solarKwh} solar (${solarLabel}), ${gridKwh} grid ` +
+      `(${gridLabel}), ${(d.input_kwh ?? 0).toFixed(2)} kWh total.`
     : "Energy mix unavailable.");
 
   el("#mixNote").textContent = !known && d.solar_reported === false
@@ -654,8 +665,8 @@ function renderMix(d) {
       "station with no PV sensor is not the same as one harvesting nothing."
     : !known
       ? "Nothing came in over this window."
-      : `${(d.input_kwh ?? 0).toFixed(2)} kWh in. What came in, not what ` +
-        `powered the load — the battery sits in between.`;
+      // The total is beside the heading now; this only carries the caveat.
+      : "What came in, not what powered the load — the battery sits in between.";
 }
 
 export const energy = {
@@ -691,7 +702,6 @@ export const energy = {
       el("#eProj").innerHTML = d.pricing_enabled
         ? `${fmtMoney(d.cost_per_day, cur)}/day · <b>${fmtMoney(d.cost_per_month, cur)}/mo</b>`
         : "—";
-      el("#eSolarKwh").textContent = (d.solar_kwh ?? 0).toFixed(2);
       renderMix(d);
       el("#eLoadCost").textContent =
         d.pricing_enabled ? fmtMoney(d.load_cost, cur) : "—";

@@ -52,6 +52,7 @@
      tuned for a 1px border disappears once it is SVG geometry. */
   --ring: rgba(255, 255, 255, .22);
   --knob: #f1f3f7;
+  --on-fill: #12151c;
   --glass-blur: saturate(180%) blur(24px);
   /* Fills *on* glass: soft for trays, plain for controls, hover for feedback.
      Translucent rather than solid, so a control still shows the backdrop and
@@ -94,6 +95,7 @@
     --glass-hi: rgba(255, 255, 255, .85);
     --ring: rgba(16, 24, 40, .20);
     --knob: #ffffff;
+    --on-fill: #ffffff;
     --glass-blur: saturate(180%) blur(24px);
     --fill-soft: rgba(16, 24, 40, .035);
     --fill: rgba(16, 24, 40, .07);
@@ -133,6 +135,7 @@
   --glass-hi: rgba(255, 255, 255, .85);
   --ring: rgba(16, 24, 40, .20);
   --knob: #ffffff;
+  --on-fill: #ffffff;
   --glass-blur: saturate(180%) blur(24px);
   --fill-soft: rgba(16, 24, 40, .035);
   --fill: rgba(16, 24, 40, .07);
@@ -861,22 +864,38 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
   /* A surface-coloured gap, so the two segments read as two rather than as
      one bar changing colour mid-way. */
   gap: 2px;
-  height: 14px;
+  /* Tall enough to hold its own labels: the kWh is the figure being asked for,
+     and putting it on the mark is what saves a glance down to the key. */
+  height: 36px;
   margin-bottom: 12px;
 }
 .share-seg {
   flex: 0 1 0;
   min-width: 3px;
-  border-radius: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
   transition: flex-grow 400ms var(--ease);
 }
+.share-seg b {
+  color: var(--on-fill);
+  font-size: 14px;
+  font-weight: 650;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 /* Nothing to divide: show the empty track rather than a bar claiming 100%. */
-.share-bar.unknown { background: var(--fill-soft); border-radius: 4px; }
+.share-bar.unknown { background: var(--fill-soft); border-radius: 6px; }
 .seg-solar { background: var(--c-solar-fill); }
 .seg-grid { background: var(--c-acin-fill); }
 
-.share-keys { display: flex; flex-wrap: wrap; gap: 8px 28px; }
-.share-key { display: flex; align-items: baseline; gap: 6px; }
+.share-keys { display: flex; flex-wrap: wrap; gap: 10px 32px; }
+/* Shaped like the metric tiles above it, so the split reads as a headline
+   figure rather than as a caption under the bar. */
+.share-key { display: flex; flex-direction: column; gap: 2px; }
+.share-head { display: flex; align-items: center; gap: 6px; }
 .share-key i { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
 /* Text stays in text tokens -- the swatch beside it carries the identity. */
 .share-k {
@@ -888,12 +907,27 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
 }
 .share-v {
   color: var(--text);
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 650;
-  letter-spacing: -.01em;
+  letter-spacing: -.02em;
   font-variant-numeric: tabular-nums;
 }
-.share-sub { color: var(--text-dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+.share-v .unit { color: var(--text-dim); font-size: 13px; margin-left: 2px; font-weight: 500; }
+.share-sub {
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+}
+/* The window total, pushed to the end of its heading. */
+.h2-total { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 600; }
+@media (max-width: 560px) {
+  /* Too narrow to hold a label inside a segment without clipping it. The keys
+     carry the same figures right underneath. */
+  .share-bar { height: 20px; }
+  .share-seg b { display: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   .share-seg { transition: none; }
 }
