@@ -208,6 +208,50 @@ SWITCHES: tuple[dict[str, Any], ...] = (
 )
 
 
+async def check(
+    config: MqttConfig, *, device_model: str, device_serial: str
+) -> dict[str, Any]:
+    """Connect once, announce, and report what happened.
+
+    Behind ``ecoflow-nut mqtt test``. Without it the only feedback on a broker
+    misconfiguration is a ``mqtt.disconnected`` line every ten seconds in the
+    journal, which says the same thing whether the host is wrong, the password
+    is wrong, or the optional extra was never installed.
+    """
+    try:
+        import aiomqtt
+    except ImportError as exc:
+        raise RuntimeError(
+            "the [mqtt] extra is not installed in this environment -- "
+            "pip install 'ecoflow-nut-bridge[mqtt]'"
+        ) from exc
+
+    pub = MqttPublisher(config, device_model=device_model, device_serial=device_serial)
+    async with aiomqtt.Client(
+        hostname=config.host,
+        port=config.port,
+        username=config.username or None,
+        password=config.password or None,
+        identifier=f"{config.client_id}-check",
+        keepalive=config.keepalive_seconds,
+        tls_params=aiomqtt.TLSParameters() if config.tls else None,
+    ) as client:
+        payloads = pub.discovery_payloads()
+        for topic, payload in payloads:
+            await client.publish(topic, json.dumps(payload), qos=1, retain=True)
+        await client.publish(pub.availability_topic, "online", qos=1, retain=True)
+        return {
+            "broker": f"{config.host}:{config.port}",
+            "tls": config.tls,
+            "authenticated": bool(config.username),
+            "entities_announced": len(payloads),
+            "discovery_prefix": config.discovery_prefix,
+            "state_topic": pub.state_topic,
+            "availability_topic": pub.availability_topic,
+            "command_topics": [pub.command_topic(s["output"]) for s in SWITCHES],
+        }
+
+
 class MqttPublisher:
     """Owns the broker connection, the discovery announcement and state pushes."""
 
@@ -363,12 +407,20 @@ class MqttPublisher:
                     self._client = client
                     log.info("mqtt.connected", host=cfg.host, port=cfg.port)
                     await self._announce(client)
-                    await asyncio.gather(
-                        self._publish_loop(client),
-                        self._command_loop(client),
-                    )
+                    try:
+                        await asyncio.gather(
+                            self._publish_loop(client),
+                            self._command_loop(client),
+                        )
+                    except asyncio.CancelledError:
+                        # Inside the `async with`, deliberately. Leaving this to
+                        # an outer handler put it after the context manager had
+                        # already closed the socket, so the publish went nowhere
+                        # and every clean shutdown left HA reading "online" until
+                        # the keepalive lapsed and the will fired.
+                        await self._say_goodbye(client)
+                        raise
             except asyncio.CancelledError:
-                await self._say_goodbye()
                 raise
             except Exception as exc:  # noqa: BLE001 - the broker is optional
                 log.warning(
@@ -425,17 +477,28 @@ class MqttPublisher:
             except Exception as exc:  # noqa: BLE001 - a bad command is not fatal
                 log.error("mqtt.command_failed", output=output, error=str(exc))
 
-    async def _say_goodbye(self) -> None:
+    async def _say_goodbye(self, client: Any) -> None:
         """Mark ourselves offline on a clean shutdown, rather than leaving it to
         the broker's will -- HA then updates immediately instead of after the
-        keepalive expires."""
-        client, self._client = self._client, None
-        if client is None:
-            return
+        keepalive expires.
+
+        Shielded because this runs while the task is being cancelled: an
+        unshielded await would take the cancellation at its first suspension
+        point and never reach the broker.
+        """
+        self._client = None
         try:
             await asyncio.wait_for(
-                client.publish(self.availability_topic, "offline", qos=1, retain=True),
+                asyncio.shield(
+                    asyncio.ensure_future(
+                        client.publish(
+                            self.availability_topic, "offline", qos=1, retain=True
+                        )
+                    )
+                ),
                 timeout=2,
             )
         except Exception:  # noqa: BLE001 - we are shutting down regardless
+            pass
+        except asyncio.CancelledError:
             pass

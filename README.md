@@ -807,6 +807,23 @@ pip install "ecoflow-nut-bridge[mqtt]"   # systemd/install.sh already does this
 Put the password in `ECOFLOW_MQTT_PASSWORD` (a systemd drop-in) rather than in
 `config.yaml`, which is world-readable in `/etc`.
 
+Check the settings before restarting anything — this connects, announces the
+entities and reports, exiting non-zero if it cannot:
+
+```bash
+ecoflow-nut --config /etc/ecoflow-nut/config.yaml mqtt test
+```
+
+Worth using: the daemon retries a bad broker forever and logs the same
+`mqtt.disconnected` line each time, so a wrong host, a wrong password and a
+missing `[mqtt]` extra all look identical in the journal. This says which.
+Then restart and watch for `mqtt.connected` followed by `mqtt.announced`:
+
+```bash
+sudo systemctl restart ecoflow-nut-bridge
+journalctl -u ecoflow-nut-bridge -f | grep mqtt
+```
+
 Everything is published as one retained JSON message per update on
 `<base_topic>/<device_id>/state`, with each entity reading it through a
 `value_template` — so a reading costs one message rather than one per entity,

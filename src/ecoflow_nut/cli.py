@@ -678,6 +678,51 @@ def run(ctx: click.Context) -> None:
     sys.exit(run_daemon(ctx.obj["config_path"]))
 
 
+@cli.group()
+@click.pass_context
+def mqtt(ctx: click.Context) -> None:  # noqa: D401
+    """Home Assistant integration over MQTT discovery."""
+
+
+@mqtt.command("test")
+@click.pass_context
+def mqtt_test(ctx: click.Context) -> None:
+    """Connect to the broker and announce the entities, then report.
+
+    Checks the configuration without restarting the service. The daemon retries
+    a bad broker forever and logs the same line each time, so a wrong host, a
+    wrong password and a missing extra all look identical in the journal; this
+    says which.
+    """
+    from . import mqtt as mqtt_mod
+
+    config = load_config(ctx.obj["config_path"])
+    configure_logging(config.logging.level, config.logging.format)
+    if not config.mqtt.enabled:
+        click.echo("note: mqtt.enabled is false -- testing the settings anyway.")
+    try:
+        report = asyncio.run(
+            mqtt_mod.check(
+                config.mqtt,
+                device_model=config.nut.static_values.model,
+                device_serial=config.nut.static_values.serial,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - the whole point is to explain it
+        raise SystemExit(
+            f"MQTT check failed against {config.mqtt.host}:{config.mqtt.port}\n"
+            f"  {type(exc).__name__}: {exc}\n"
+            "  check mqtt.host/port, the username and ECOFLOW_MQTT_PASSWORD, "
+            "and that the broker accepts connections from this host."
+        ) from exc
+    click.echo(json.dumps(report, indent=2))
+    click.echo(
+        "\nOK. The entities are announced and retained, so they appear in Home "
+        "Assistant\nunder Settings -> Devices & services -> MQTT. Set "
+        "'mqtt.enabled: true' and restart\nthe service for live values."
+    )
+
+
 @cli.command()
 @click.pass_context
 def seed(ctx: click.Context) -> None:
