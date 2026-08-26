@@ -598,6 +598,24 @@ often as the MPPT), so a load change briefly pairs a fresh output reading with
 a stale input one. A negative residual means two sensors disagree, and reads as
 `–` rather than as a station making power.
 
+The Energy page carries the same balance integrated over the chosen window —
+*Where it went*: what came in, what reached the load, the pack's **net** change
+(a battery that filled and emptied twice over nets to nearly zero, and saying
+so stops that reading as "the battery did nothing"), and the conversion loss
+left over. That last figure is the floor under every runtime estimate, because
+it is charged whether or not anything is plugged in.
+
+It needs the pack's own contribution recorded throughout the window. The
+`battery_watts` and `dc_output_watts` columns were added after the first
+release, so rows written before then hold NULL and the section says the balance
+cannot be struck rather than folding every watt-hour the battery moved into
+"conversion" — over a day that is hundreds of Wh presented as loss. It fills in
+as the window moves forward.
+
+*Load delivered* now sums **every** port rather than AC alone, so the balance
+closes; USB and 12V are typically under 1% of the total, which shifts
+`load_cost` and `net_saving` by the same fraction.
+
 A **Battery health** card appears on models whose BMS reports it (the DELTA 2
 generation): pack temperature with the hot/cold cell range beside it, the
 cell-voltage spread (which widens long before capacity or SoH move, and is the

@@ -242,3 +242,68 @@ def test_a_window_with_no_input_at_all_has_no_split() -> None:
 def test_an_empty_series_has_no_split() -> None:
     money = compute_energy([], 3600, PricingConfig(enabled=True))
     assert money["solar_share"] is None and money["grid_share"] is None
+
+
+# ---------------------------------------------------------------------- #
+# Energy balance over a window
+# ---------------------------------------------------------------------- #
+
+
+def test_the_window_balances_the_same_way_the_live_figure_does() -> None:
+    """Conservation, integrated: in - out - battery is what the box burned.
+
+    600 W in and 400 W out for two hours with the pack taking 150 W leaves
+    50 W of conversion, or 0.1 kWh over the window.
+    """
+    series = _hourly(2, in_w=600.0, out_w=400.0, solar_w=0.0, bat_w=150.0)
+
+    money = compute_energy(series, 3600, PricingConfig(enabled=True))
+
+    assert money["input_kwh"] == pytest.approx(1.2)
+    assert money["load_kwh"] == pytest.approx(0.8)
+    assert money["battery_kwh"] == pytest.approx(0.3)
+    assert money["conversion_kwh"] == pytest.approx(0.1)
+
+
+def test_a_discharging_window_balances_too() -> None:
+    """The pack as a source: it covers the load and the losses together."""
+    series = _hourly(2, in_w=0.0, out_w=200.0, solar_w=0.0, bat_w=-225.0)
+
+    money = compute_energy(series, 3600, PricingConfig(enabled=True))
+
+    assert money["battery_kwh"] == pytest.approx(-0.45)
+    assert money["conversion_kwh"] == pytest.approx(0.05)
+
+
+def test_a_window_with_no_pack_samples_refuses_to_balance() -> None:
+    """The database gained battery_watts partway through its life, so older
+    rows hold NULL. Treating that as zero would fold every watt-hour the
+    battery moved into "conversion" -- over a day that is hundreds of Wh
+    presented as loss, which is worse than saying nothing.
+    """
+    series = _hourly(2, in_w=600.0, out_w=400.0, solar_w=0.0, bat_w=None)
+
+    money = compute_energy(series, 3600, PricingConfig(enabled=True))
+
+    assert money["battery_reported"] is False
+    assert money["battery_kwh"] is None
+    assert money["conversion_kwh"] is None
+    # The figures that never needed the pack are still there.
+    assert money["grid_kwh"] == pytest.approx(1.2)
+
+
+def test_a_pack_that_ended_where_it_started_shows_a_net_of_zero() -> None:
+    """Net change, not throughput: a full charge and discharge nets out, and
+    the losses of both still land in the residual."""
+    series = [
+        {"ts": "2026-06-01T12:00:00+00:00", "in_w": 500.0, "out_w": 100.0,
+         "solar_w": 0.0, "bat_w": 350.0},
+        {"ts": "2026-06-01T13:00:00+00:00", "in_w": 0.0, "out_w": 300.0,
+         "solar_w": 0.0, "bat_w": -350.0},
+    ]
+
+    money = compute_energy(series, 3600, PricingConfig(enabled=True))
+
+    assert money["battery_kwh"] == pytest.approx(0.0)
+    # 0.5 kWh in, 0.4 kWh out, pack net zero -> 0.1 kWh burned.
+    assert money["conversion_kwh"] == pytest.approx(0.1)

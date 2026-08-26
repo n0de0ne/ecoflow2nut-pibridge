@@ -75,6 +75,10 @@ def compute_energy(
     # reporting a genuine zero -- and only the latter can honestly be called
     # 0% solar.
     solar_reported = False
+    # Same question for the pack: rows written before the battery_watts column
+    # existed hold NULL, and a window made only of those cannot be balanced.
+    battery_reported = False
+    battery_kwh = 0.0
     n = 0
     for item in series:
         in_w = float(item.get("in_w") or 0.0)
@@ -82,6 +86,9 @@ def compute_energy(
         raw_solar = item.get("solar_w")
         solar_reported = solar_reported or raw_solar is not None
         solar_w = float(raw_solar or 0.0)
+        raw_bat = item.get("bat_w")
+        battery_reported = battery_reported or raw_bat is not None
+        battery_kwh += float(raw_bat or 0.0) * wh_per_bucket / 1000.0
         e_in = in_w * wh_per_bucket / 1000.0
         e_out = out_w * wh_per_bucket / 1000.0
         e_solar = solar_w * wh_per_bucket / 1000.0
@@ -115,6 +122,16 @@ def compute_energy(
     # reports PV, or a window in which nothing came in at all. "100% grid" is a
     # claim, and neither case supports it.
     input_kwh = in_kwh + solar_kwh
+    # What the station itself burned over the window: the inverter, the charger,
+    # the DC-DC regulators and its own electronics, none of which is metered.
+    # Same conservation as the live figure, integrated:
+    #     conversion = (grid + solar) - draw - battery
+    # None unless the pack was recorded throughout: without that term the
+    # residual silently absorbs every watt-hour the battery moved, which over a
+    # day is far larger than the losses it claims to be.
+    conversion_kwh = (
+        round(input_kwh - out_kwh - battery_kwh, 3) if battery_reported else None
+    )
     if not solar_reported or input_kwh <= 0:
         solar_share: float | None = None
         grid_share: float | None = None
@@ -130,6 +147,9 @@ def compute_energy(
         "load_kwh": round(out_kwh, 3),
         "solar_kwh": round(solar_kwh, 3),
         "input_kwh": round(input_kwh, 3),
+        "battery_kwh": round(battery_kwh, 3) if battery_reported else None,
+        "conversion_kwh": conversion_kwh,
+        "battery_reported": battery_reported,
         "solar_reported": solar_reported,
         "solar_share": solar_share,
         "grid_share": grid_share,

@@ -64,6 +64,12 @@ _COLUMN_TYPES = {
     # Appended deliberately: ALTER TABLE ADD COLUMN puts new columns last,
     # so appending here keeps a migrated database and a fresh one identical.
     "solar_input_watts": "REAL",
+    # Needed to close the energy balance over a window: what the pack took or
+    # gave, and the 12V draw. Rows written before these columns existed hold
+    # NULL, which is what lets the Energy page say "not recorded for this
+    # window" instead of silently costing the gap as conversion loss.
+    "battery_watts": "REAL",
+    "dc_output_watts": "REAL",
 }
 
 
@@ -166,6 +172,8 @@ class SqliteTelemetryStore:
             state.remain_discharge_minutes,
             state.error_code,
             state.solar_input_watts,
+            state.battery_watts,
+            state.dc_output_watts,
         )
         try:
             async with self._lock:
@@ -255,8 +263,13 @@ class SqliteTelemetryStore:
         assert self._conn is not None
         sql = (
             "SELECT (CAST(strftime('%s', ts) AS INTEGER) / ?) * ? AS bucket, "
-            "avg(ac_input_watts) AS in_w, avg(ac_output_watts) AS out_w, "
-            "avg(solar_input_watts) AS solar_w "
+            "avg(ac_input_watts) AS in_w, avg(solar_input_watts) AS solar_w, "
+            # The full draw, not just AC: the balance has to account for every
+            # port or the residual absorbs whatever was left out.
+            "avg(ac_output_watts) + coalesce(avg(usb_output_watts), 0) "
+            "  + coalesce(avg(usbc_output_watts), 0) "
+            "  + coalesce(avg(dc_output_watts), 0) AS out_w, "
+            "avg(battery_watts) AS bat_w "
             f"FROM {self._table} "
             "WHERE device = ? "
             "  AND ts >= datetime(?, 'unixepoch') "
@@ -272,6 +285,7 @@ class SqliteTelemetryStore:
                 "in_w": r["in_w"],
                 "out_w": r["out_w"],
                 "solar_w": r["solar_w"],
+                "bat_w": r["bat_w"],
             }
             for r in rows
         ]

@@ -270,6 +270,28 @@
           load — the battery sits in between.</p>
       </div>
 
+      <h2 class="sub">Where it went</h2>
+      <div class="balance" id="eBalance">
+        <div class="brow">
+          <span class="bk">Came in</span>
+          <span class="bd" id="eBalInParts"></span>
+          <span class="bv" id="eBalIn">–</span></div>
+        <div class="brow">
+          <span class="bk">Went to the load</span>
+          <span class="bd">every port, not just AC</span>
+          <span class="bv" id="eBalOut">–</span></div>
+        <div class="brow">
+          <span class="bk" id="eBalBattK">Net into the battery</span>
+          <span class="bd" id="eBalBattD"></span>
+          <span class="bv" id="eBalBatt">–</span></div>
+        <div class="brule"></div>
+        <div class="brow loss">
+          <span class="bk">Conversion &amp; idle</span>
+          <span class="bd" id="eBalLossD"></span>
+          <span class="bv" id="eBalLoss">–</span></div>
+      </div>
+      <p id="eBalNote" class="muted hint"></p>
+
       <h2 class="sub">What it cost, what it saved</h2>
       <div class="grid">
         <div class="metric"><div class="label">Load cost (grid rates)</div>

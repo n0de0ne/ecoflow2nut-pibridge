@@ -747,6 +747,58 @@ function renderMix(d) {
       : "What came in, not what powered the load — the battery sits in between.";
 }
 
+const KWH = v => `${v.toFixed(2)} kWh`;
+
+/**
+ * The dashboard's power balance, integrated over the chosen window.
+ *
+ * Same conservation, in energy rather than watts, and the same refusal to
+ * guess: without the pack's own contribution the residual silently absorbs
+ * every watt-hour the battery moved, which over a day dwarfs the losses it
+ * would claim to be.
+ */
+function renderEnergyBalance(d) {
+  const block = el("#eBalance");
+  const loss = d.conversion_kwh;
+  const batt = d.battery_kwh;
+  const known = d.battery_reported === true && loss != null && batt != null;
+  block.hidden = !known;
+  if (!known) {
+    el("#eBalNote").textContent =
+      "The battery's own contribution was not recorded over this window, and " +
+      "without it the rest cannot be balanced. New samples carry it, so this " +
+      "fills in as the window moves forward.";
+    return;
+  }
+
+  el("#eBalIn").textContent = KWH(d.input_kwh ?? 0);
+  el("#eBalInParts").textContent =
+    `grid ${(d.grid_kwh ?? 0).toFixed(2)} · solar ${(d.solar_kwh ?? 0).toFixed(2)}`;
+  el("#eBalOut").textContent = KWH(d.load_kwh ?? 0);
+
+  el("#eBalBattK").textContent =
+    batt >= 0 ? "Net into the battery" : "Net out of the battery";
+  el("#eBalBatt").textContent = `${batt >= 0 ? "+" : "−"}${KWH(Math.abs(batt))}`;
+  // Net, not throughput: a pack that filled and emptied twice over shows near
+  // zero here, and saying so stops that reading as "the battery did nothing".
+  el("#eBalBattD").textContent = "net change over the window";
+
+  const bogus = loss < 0;
+  el("#eBalLoss").textContent = bogus ? "–" : KWH(loss);
+  el("#eBalLossD").textContent = bogus
+    ? "sensors disagree over this window"
+    : d.input_kwh > 0 ? `${(loss / d.input_kwh * 100).toFixed(1)}% of what came in` : "";
+
+  const hours = d.span_hours || 0;
+  el("#eBalNote").textContent = bogus
+    ? "The ports add up to more than the input over this window, which is " +
+      "measurement noise accumulating rather than a reading."
+    : `That is ${hours > 0 ? `${Math.round(loss * 1000 / hours)} W on average, ` : ""}` +
+      "burned by the inverter, the charger and the unit's own electronics. It " +
+      "is charged whether or not anything is plugged in, so it is the floor " +
+      "under every runtime estimate.";
+}
+
 export const energy = {
   needs: ["state"],
 
@@ -781,6 +833,7 @@ export const energy = {
         ? `${fmtMoney(d.cost_per_day, cur)}/day · <b>${fmtMoney(d.cost_per_month, cur)}/mo</b>`
         : "—";
       renderMix(d);
+      renderEnergyBalance(d);
       el("#eLoadCost").textContent =
         d.pricing_enabled ? fmtMoney(d.load_cost, cur) : "—";
       el("#eSolarSaving").textContent =
@@ -793,12 +846,10 @@ export const energy = {
         ? (net < 0 ? `−${fmtMoney(-net, cur)}` : fmtMoney(net, cur)) : "—";
 
       el("#energyNote").textContent = d.pricing_enabled
-        ? `Grid draw priced by HC window ${d.hc_window}. ` +
-          `Load delivered: ${(d.load_kwh ?? 0).toFixed(2)} kWh. ` +
-          `Over a window shorter than a full charge cycle these figures are ` +
-          `skewed by the battery's own level moving; they settle over days.`
-        : `Enable pricing in Settings to see cost. ` +
-          `Load delivered: ${(d.load_kwh ?? 0).toFixed(2)} kWh.`;
+        ? `Grid draw priced by HC window ${d.hc_window}. Over a window ` +
+          `shorter than a full charge cycle these figures are skewed by the ` +
+          `battery's own level moving; they settle over days.`
+        : "Enable pricing in Settings to see cost.";
     } catch (err) {
       el("#energyNote").textContent = `Energy unavailable: ${err.reason || err.message}`;
     }

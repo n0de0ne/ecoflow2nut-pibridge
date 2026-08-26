@@ -974,6 +974,13 @@ h2.sub { margin-top: 20px; }
    gap. */
 .brule { grid-column: 1 / -1; border-top: 1px solid var(--glass-edge); margin-top: 1px; }
 .brow.loss .bk, .brow.loss .bv { color: var(--c-out); }
+@media (max-width: 560px) {
+  /* No room for three columns, and the middle one truncates to "grid 3.9..."
+     which is worse than absent. Nothing is lost: the parts are restated in the
+     section above and the rest is prose the note already carries. */
+  .balance { grid-template-columns: 1fr auto; }
+  .bd { display: none; }
+}
 
 /* --------------------------------------------------------------------- */
 /* Charge / discharge meter                                               */

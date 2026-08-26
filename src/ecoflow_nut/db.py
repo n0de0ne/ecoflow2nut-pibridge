@@ -36,6 +36,8 @@ _METRIC_COLUMNS = (
     "input_watts",
     "output_watts",
     "solar_input_watts",
+    "battery_watts",
+    "dc_output_watts",
     "runtime_seconds",
 )
 
@@ -127,17 +129,19 @@ class TelemetryStore:
                 remain_charge_min  integer,
                 remain_discharge_min integer,
                 error_code         integer,
-                solar_input_watts  real
+                solar_input_watts  real,
+                battery_watts      real,
+                dc_output_watts    real
             );
             CREATE INDEX IF NOT EXISTS {self._table}_device_ts_idx
                 ON {self._table} (device, ts DESC);
             """)
         # CREATE TABLE IF NOT EXISTS leaves an existing table untouched, so a
         # database from an older version needs metrics added after the fact.
-        await self._pool.execute(
-            f"ALTER TABLE {self._table} "
-            "ADD COLUMN IF NOT EXISTS solar_input_watts real"
-        )
+        for column in ("solar_input_watts", "battery_watts", "dc_output_watts"):
+            await self._pool.execute(
+                f"ALTER TABLE {self._table} ADD COLUMN IF NOT EXISTS {column} real"
+            )
 
     async def record(
         self,
@@ -165,10 +169,10 @@ class TelemetryStore:
                     usb_output_watts, usbc_output_watts, input_watts, output_watts,
                     runtime_seconds, status, ac_input_present, ac_output_on,
                     remain_charge_min, remain_discharge_min, error_code,
-                    solar_input_watts
+                    solar_input_watts, battery_watts, dc_output_watts
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                    $15, $16
+                    $15, $16, $17, $18
                 )
                 """,
                 device,
@@ -187,6 +191,8 @@ class TelemetryStore:
                 state.remain_discharge_minutes,
                 state.error_code,
                 state.solar_input_watts,
+                state.battery_watts,
+                state.dc_output_watts,
             )
         except Exception as exc:  # noqa: BLE001 - logging must never crash the poll
             log.warning("db.record_failed", error=str(exc))
@@ -256,8 +262,13 @@ class TelemetryStore:
             SELECT
                 date_bin(make_interval(secs => $2), ts, 'epoch') AS bucket,
                 avg(ac_input_watts)::real AS in_w,
-                avg(ac_output_watts)::real AS out_w,
-                avg(solar_input_watts)::real AS solar_w
+                avg(solar_input_watts)::real AS solar_w,
+                -- The full draw, not just AC: the balance has to account for
+                -- every port or the residual absorbs whatever was left out.
+                (avg(ac_output_watts) + coalesce(avg(usb_output_watts), 0)
+                 + coalesce(avg(usbc_output_watts), 0)
+                 + coalesce(avg(dc_output_watts), 0))::real AS out_w,
+                avg(battery_watts)::real AS bat_w
             FROM {self._table}
             WHERE device = $1 AND ts >= to_timestamp($3) AND ts < to_timestamp($4)
             GROUP BY bucket
@@ -274,6 +285,7 @@ class TelemetryStore:
                 "in_w": r["in_w"],
                 "out_w": r["out_w"],
                 "solar_w": r["solar_w"],
+                "bat_w": r["bat_w"],
             }
             for r in rows
         ]
