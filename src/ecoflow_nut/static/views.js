@@ -585,13 +585,13 @@ export const history = {
     this._onRange = e => {
       const btn = e.target.closest("[data-min]");
       if (!btn) return;
-      for (const b of els(".range button")) b.classList.toggle("active", b === btn);
+      for (const b of els("#chartRange button")) b.classList.toggle("active", b === btn);
       sharedWindow.presetMinutes = Number(btn.dataset.min);
       const now = Date.now();
       this.chart.setWindow(now - sharedWindow.presetMinutes * MINUTE, now,
         { live: true, immediate: true });
     };
-    el(".range").addEventListener("click", this._onRange);
+    el("#chartRange").addEventListener("click", this._onRange);
 
     this._onLive = () => {
       const now = Date.now();
@@ -682,7 +682,7 @@ export const history = {
   },
 
   unmount() {
-    el(".range")?.removeEventListener("click", this._onRange);
+    el("#chartRange")?.removeEventListener("click", this._onRange);
     el("#chartLive")?.removeEventListener("click", this._onLive);
     el("#chartReset")?.removeEventListener("click", this._onReset);
     el("#chartLegend")?.removeEventListener("click", this._onLegend);
@@ -821,11 +821,274 @@ function renderEnergyBalance(d) {
       "under every runtime estimate.";
 }
 
+// ---------------------------------------------------------------------- //
+// Solar production, by local calendar day
+// ---------------------------------------------------------------------- //
+
+const KWH2 = v => `${v.toFixed(2)} kWh`;
+// Calendar-scale figures: a day's total does not move fast enough to be worth
+// re-querying a 90-day grouped scan every minute the tab is open.
+const SOLAR_REFRESH_MS = 5 * MINUTE;
+const SOLAR_DAYS_KEY = "ecoflow_solar_days";
+
+const loadSolarDays = () => Number(localStorage.getItem(SOLAR_DAYS_KEY)) || 30;
+
+/** "Tue 26 Aug", in the browser's locale. */
+function dayLabel(iso, opts) {
+  // Parsed with an explicit time: a bare "2026-08-26" is UTC midnight, which in
+  // any western timezone is the 25th.
+  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined,
+    opts || { weekday: "short", day: "numeric", month: "short" });
+}
+
+const monthLabel = iso =>
+  new Date(`${iso}T00:00:00`).toLocaleDateString(undefined,
+    { month: "long", year: "numeric" });
+
+const clock = minutes =>
+  `${String(Math.floor(minutes / 60)).padStart(2, "0")}:` +
+  `${String(Math.round(minutes) % 60).padStart(2, "0")}`;
+
+/**
+ * Today against yesterday *at the same point in the day*.
+ *
+ * Against yesterday's total it would read as a collapse every morning, which is
+ * the one comparison guaranteed to be useless.
+ */
+function paceNote(today, yesterday, minutes) {
+  const when = minutes == null ? "" : ` at ${clock(minutes)}`;
+  if (today == null || yesterday == null) return "No comparable day recorded yet.";
+  // A percentage off a near-zero base is noise: 20 Wh against 5 Wh is "300%
+  // ahead" and says nothing at dawn.
+  if (yesterday < 0.05 && today < 0.05) return `Neither day had started${when}.`;
+  if (yesterday < 0.05) return `Yesterday had produced nothing by this point.`;
+  const delta = (today - yesterday) / yesterday * 100;
+  if (Math.abs(delta) < 2) return `Level with yesterday${when}.`;
+  return `${Math.round(Math.abs(delta))}% ` +
+    `${delta > 0 ? "ahead of" : "behind"} yesterday${when}.`;
+}
+
+/** The bucket the daily peak was averaged over, named for a sentence. */
+const peakWindow = seconds =>
+  seconds === 3600 ? "hour" : formatBucket(seconds);
+
+function dayDetail(day, bucketSeconds) {
+  const when = dayLabel(day.date);
+  if (!day.hours) return `${when} · nothing recorded`;
+  const bits = [when];
+  if (day.solar_kwh != null) bits.push(`${KWH2(day.solar_kwh)} solar`);
+  bits.push(`${KWH2(day.grid_kwh ?? 0)} from the grid`);
+  if (day.solar_share != null) {
+    bits.push(`${Math.round(day.solar_share * 100)}% solar`);
+  }
+  if (day.peak_w) bits.push(`best ${peakWindow(bucketSeconds)} ${day.peak_w} W`);
+  // Said out loud, because a short bar on a partly-recorded day looks exactly
+  // like a short bar on a dull one.
+  if (!day.whole && day.hours) bits.push(`only ${day.hours.toFixed(1)} h recorded`);
+  return bits.join(" · ");
+}
+
+/**
+ * One stacked bar per calendar day: solar at the bottom, grid above it.
+ *
+ * Solar sits on the baseline so its top edge is comparable straight across the
+ * month; the grid on top makes the whole bar the day's input, which is the
+ * other half of the question -- how much you still had to buy.
+ */
+function renderDayBars(d) {
+  const host = el("#solarBars");
+  const days = d.days || [];
+  const peak = Math.max(
+    0.001, ...days.map(x => (x.solar_kwh || 0) + (x.grid_kwh || 0)));
+  host.innerHTML = days.map(x => {
+    const solar = x.solar_kwh || 0, grid = x.grid_kwh || 0;
+    const label = escapeHtml(dayDetail(x, d.bucket_seconds));
+    return `<div class="daybar${x.hours ? "" : " missing"}" role="option"
+              id="sd-${escapeHtml(x.date)}" aria-selected="false" aria-label="${label}">
+      <i class="seg-grid" style="height:${grid / peak * 100}%"></i>
+      <i class="seg-solar" style="height:${solar / peak * 100}%"></i>
+    </div>`;
+  }).join("");
+  el("#solAxisFrom").textContent = days.length ? dayLabel(days[0].date) : "";
+  el("#solAxisTo").textContent =
+    days.length > 1 ? dayLabel(days.at(-1).date) : "";
+}
+
+/**
+ * Bring the selected day into view by scrolling the strip and nothing else.
+ *
+ * scrollIntoView would do it, but "nearest" is nearest in both axes: with the
+ * card below the fold it drags the whole page down on first render, which is
+ * not what selecting a bar asked for.
+ */
+function revealDay(host, bar) {
+  if (!bar) return;
+  const left = bar.offsetLeft - host.scrollLeft;
+  if (left < 0) host.scrollLeft = bar.offsetLeft;
+  else if (left + bar.offsetWidth > host.clientWidth) {
+    host.scrollLeft = bar.offsetLeft + bar.offsetWidth - host.clientWidth;
+  }
+}
+
+function renderSolarTotals(d) {
+  const w = d.window || {};
+  const month = d.month, prev = d.prev_month;
+  const perDay = m => m.days ? (m.solar_kwh / m.days).toFixed(2) : "–";
+
+  el("#solMonthK").textContent = month ? monthLabel(month.month) : "This month";
+  el("#solMonth").textContent = month ? KWH2(month.solar_kwh) : "–";
+  // Months are different lengths and this one is nearly always half-finished,
+  // so they are compared per day, never total against total.
+  el("#solPrevMonth").textContent = !month ? ""
+    : prev
+      ? `${monthLabel(prev.month)} came to ${KWH2(prev.solar_kwh)} — ` +
+        `${perDay(prev)} a day against ${perDay(month)} so far.`
+      : `${month.days} day${month.days === 1 ? "" : "s"} recorded so far.`;
+
+  el("#solAvg").textContent =
+    w.daily_avg_kwh == null ? "–" : KWH2(w.daily_avg_kwh);
+  el("#solAvgD").textContent = w.whole_days
+    ? `Across ${w.whole_days} whole day${w.whole_days === 1 ? "" : "s"}; ` +
+      "part-days are left out."
+    : "No whole day recorded yet.";
+
+  el("#solBest").textContent = d.best ? KWH2(d.best.solar_kwh) : "–";
+  el("#solBestD").textContent = d.best
+    ? dayLabel(d.best.date, { weekday: "long", day: "numeric", month: "long" })
+    : "";
+
+  el("#solShare").textContent =
+    w.solar_share == null ? "–" : `${Math.round(w.solar_share * 100)}%`;
+  el("#solShareD").textContent = w.solar_kwh == null ? ""
+    : `${KWH2(w.solar_kwh)} solar against ${KWH2(w.grid_kwh ?? 0)} bought.`;
+
+  el("#solBarsTotal").textContent = w.days
+    ? `${KWH2(w.solar_kwh ?? 0)} over ${w.days} day${w.days === 1 ? "" : "s"}` : "";
+}
+
+/**
+ * Hidden outright on a station whose PV input is never reported, rather than
+ * charted as a month of flat zero -- which is what a rainy month looks like.
+ */
+function renderSolar(d) {
+  const card = el("#solarCard");
+  card.hidden = !(d && d.enabled && d.reported);
+  if (card.hidden) return;
+
+  const p = d.pace || {};
+  el("#solToday").textContent =
+    p.today_kwh == null ? "–" : p.today_kwh.toFixed(2);
+  el("#solYest").textContent =
+    p.yesterday_kwh == null ? "–" : p.yesterday_kwh.toFixed(2);
+  el("#solPace").textContent =
+    paceNote(p.today_kwh, p.yesterday_kwh, p.through_minutes);
+  el("#solYestTotal").textContent = p.yesterday_total_kwh == null
+    ? "" : `Finished the day at ${KWH2(p.yesterday_total_kwh)}.`;
+
+  renderDayBars(d);
+  renderSolarTotals(d);
+  el("#solarNote").textContent =
+    "Days run midnight to midnight in this machine's timezone. Solar is " +
+    "metered where it enters the station, so some of it is lost charging the " +
+    "pack before it reaches the load.";
+}
+
 export const energy = {
   needs: ["state"],
 
-  mount() { this.refresh(); this._timer = setInterval(() => this.refresh(), 60000); },
-  unmount() { clearInterval(this._timer); },
+  mount() {
+    this.solarDays = loadSolarDays();
+    this.solarDate = null;
+    for (const b of els("#solarRange button")) {
+      b.classList.toggle("active", Number(b.dataset.days) === this.solarDays);
+    }
+    this._onSolarRange = e => {
+      const btn = e.target.closest("[data-days]");
+      if (!btn) return;
+      for (const b of els("#solarRange button")) b.classList.toggle("active", b === btn);
+      this.solarDays = Number(btn.dataset.days);
+      localStorage.setItem(SOLAR_DAYS_KEY, String(this.solarDays));
+      // A different range is a different set of days; keeping the old selection
+      // would silently point at whichever day now sits at that position.
+      this.solarDate = null;
+      this.refreshSolar();
+    };
+    el("#solarRange").addEventListener("click", this._onSolarRange);
+
+    this._onBarClick = e => {
+      const bar = e.target.closest(".daybar");
+      if (!bar) return;
+      this.selectDay([...el("#solarBars").children].indexOf(bar));
+      el("#solarBars").focus();
+    };
+    el("#solarBars").addEventListener("click", this._onBarClick);
+
+    this._onBarKey = e => {
+      const last = (this.solarData?.days || []).length - 1;
+      if (last < 0) return;
+      const at = this.dayIndex();
+      const moves = {
+        ArrowLeft: at - 1, ArrowRight: at + 1,
+        Home: 0, End: last,
+        PageDown: at - 7, PageUp: at + 7,
+      };
+      if (!(e.key in moves)) return;
+      e.preventDefault();
+      this.selectDay(Math.max(0, Math.min(moves[e.key], last)));
+    };
+    el("#solarBars").addEventListener("keydown", this._onBarKey);
+
+    this.refresh();
+    this.refreshSolar();
+    this._timer = setInterval(() => this.refresh(), 60000);
+    this._solarTimer = setInterval(() => this.refreshSolar(), SOLAR_REFRESH_MS);
+  },
+
+  unmount() {
+    clearInterval(this._timer);
+    clearInterval(this._solarTimer);
+    el("#solarRange")?.removeEventListener("click", this._onSolarRange);
+    el("#solarBars")?.removeEventListener("click", this._onBarClick);
+    el("#solarBars")?.removeEventListener("keydown", this._onBarKey);
+  },
+
+  /** The selected day's position, re-derived by date so a refresh cannot slide it. */
+  dayIndex() {
+    const days = this.solarData?.days || [];
+    const at = days.findIndex(x => x.date === this.solarDate);
+    return at >= 0 ? at : days.length - 1;
+  },
+
+  selectDay(index) {
+    const days = this.solarData?.days || [];
+    const at = Math.max(0, Math.min(index, days.length - 1));
+    const day = days[at];
+    if (!day) return;
+    this.solarDate = day.date;
+    const host = el("#solarBars");
+    [...host.children].forEach((node, n) =>
+      node.setAttribute("aria-selected", String(n === at)));
+    host.setAttribute("aria-activedescendant", `sd-${day.date}`);
+    el("#solDetail").textContent = dayDetail(day, this.solarData.bucket_seconds);
+    revealDay(host, host.children[at]);
+  },
+
+  async refreshSolar() {
+    const s = stateStore.get();
+    if (s && s.history_enabled === false) {
+      el("#solarCard").hidden = true;
+      return;
+    }
+    try {
+      const d = await api("api/solar?" + new URLSearchParams({ days: this.solarDays }));
+      this.solarData = d;
+      renderSolar(d);
+      if (!el("#solarCard").hidden) this.selectDay(this.dayIndex());
+    } catch (err) {
+      el("#solarNote").textContent =
+        `Solar history unavailable: ${err.reason || err.message}`;
+    }
+  },
 
   async refresh() {
     const s = stateStore.get();

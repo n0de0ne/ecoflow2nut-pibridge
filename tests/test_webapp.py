@@ -25,6 +25,7 @@ class _Harness:
         self.switchbot_calls: list[str] = []
         self.history_calls: list[tuple[float, float, int]] = []
         self.energy_calls: list[tuple[float, float]] = []
+        self.solar_calls: list[int] = []
         self.settings_updates: list[dict[str, object]] = []
         self.autoshutdown_enabled = False
         self.fail_control = False
@@ -75,6 +76,10 @@ class _Harness:
         self.energy_calls.append((since, until))
         return {"enabled": True, "grid_kwh": 1.5, "total_cost": 0.3, "currency": "€"}
 
+    async def solar(self, *, days: int) -> dict[str, object]:
+        self.solar_calls.append(days)
+        return {"enabled": True, "reported": True, "days": [], "window": {}}
+
 
 async def _client(
     config: WebConfig,
@@ -92,6 +97,7 @@ async def _client(
         get_settings=harness.get_settings,
         update_settings=harness.update_settings,
         energy=harness.energy,
+        solar=harness.solar,
         history_enabled=history_enabled,
         eve_control=harness.eve_control if eve_enabled else None,
         switchbot_press=harness.switchbot_press if switchbot_enabled else None,
@@ -350,6 +356,39 @@ async def test_energy_endpoint(secured: TestClient) -> None:
     assert body["grid_kwh"] == 1.5
 
 
+async def test_solar_endpoint(secured: TestClient, harness: _Harness) -> None:
+    body = await (await secured.get("/api/solar?days=14")).json()
+    assert body["enabled"] is True
+    assert harness.solar_calls[-1] == 14
+
+
+async def test_solar_defaults_to_a_month(secured: TestClient, harness: _Harness) -> None:
+    await secured.get("/api/solar")
+    assert harness.solar_calls[-1] == 30
+
+
+async def test_solar_clamps_an_absurd_range(
+    secured: TestClient, harness: _Harness
+) -> None:
+    """A grouped scan is cheap, but not "since the epoch" cheap."""
+    await secured.get("/api/solar?days=100000")
+    assert harness.solar_calls[-1] == 366
+    await secured.get("/api/solar?days=0")
+    assert harness.solar_calls[-1] == 2
+
+
+async def test_solar_rejects_a_non_numeric_range(secured: TestClient) -> None:
+    assert (await secured.get("/api/solar?days=lots")).status == 400
+
+
+async def test_solar_disabled_when_no_store(harness: _Harness) -> None:
+    client = await _client(WebConfig(auth_token="s3cret"), harness, history_enabled=False)
+    try:
+        assert await (await client.get("/api/solar")).json() == {"enabled": False}
+    finally:
+        await client.close()
+
+
 async def test_energy_disabled_when_no_store(harness: _Harness) -> None:
     client = await _client(WebConfig(auth_token="s3cret"), harness, history_enabled=False)
     try:
@@ -481,6 +520,7 @@ async def _events_server(
         get_settings=harness.get_settings,
         update_settings=harness.update_settings,
         energy=harness.energy,
+        solar=harness.solar,
         history_enabled=True,
     )
     client = TestClient(TestServer(server.build_app()))
@@ -553,6 +593,7 @@ def test_a_slow_client_loses_frames_rather_than_stalling_the_bridge() -> None:
         get_settings=dict,
         update_settings=None,  # type: ignore[arg-type]
         energy=None,  # type: ignore[arg-type]
+        solar=None,  # type: ignore[arg-type]
     )
     queue: asyncio.Queue = asyncio.Queue(maxsize=2)
     server._subscribers.add(queue)

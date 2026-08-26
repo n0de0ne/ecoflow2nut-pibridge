@@ -11,13 +11,14 @@ import statistics
 import sys
 import time
 from collections import deque
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import structlog
 
 # ``db`` is safe to import eagerly: asyncpg is only referenced under TYPE_CHECKING,
 # so this pulls in the shared bucket arithmetic without the optional dependency.
-from . import db, devices, pricing, settings_store
+from . import db, devices, pricing, settings_store, solar
 from .autoshutdown import AutoShutdownController, EveIdleConfirmer, ShutdownAction
 from .ble_client import EcoFlowBLE
 from .config import Config, load_config
@@ -296,6 +297,7 @@ class Daemon:
                 get_settings=self._get_settings,
                 update_settings=self._update_settings,
                 energy=self._web_energy,
+                solar=self._web_solar,
                 history_enabled=self._store is not None,
                 eve_control=self.control_eve if self._eve is not None else None,
                 switchbot_press=(
@@ -473,6 +475,32 @@ class Daemon:
         summary["until"] = until
         summary["bucket_seconds"] = bucket_seconds
         return summary
+
+    async def _web_solar(self, *, days: int) -> dict[str, object]:
+        """Solar production by local calendar day, for the UI's production panel.
+
+        Two queries, because they answer two questions at two resolutions. The
+        daily totals only need hourly buckets (a month is 720 rows). The
+        today-vs-yesterday pace needs quarter-hours, or "the same point in the
+        day" is an hour wide -- which at noon is a material slice of the total --
+        and it only ever spans the last two days, so it stays cheap.
+        """
+        if self._store is None:
+            return {"enabled": False}
+        device = self._config.nut.device_name
+        now = datetime.now().astimezone()
+        first = solar.local_midnight(now.date() - timedelta(days=days - 1))
+        yesterday = solar.local_midnight(now.date() - timedelta(days=1))
+        until = now.timestamp()
+
+        daily_bucket, pace_bucket = 3600, 900
+        series = await self._store.energy_series(  # type: ignore[attr-defined]
+            device, 0, daily_bucket, since=first.timestamp(), until=until
+        )
+        pace = await self._store.energy_series(  # type: ignore[attr-defined]
+            device, 0, pace_bucket, since=yesterday.timestamp(), until=until
+        )
+        return solar.summarise(series, daily_bucket, pace, pace_bucket, now=now)
 
     def _get_settings(self) -> dict[str, object]:
         """Editable-settings schema + current values for the UI form."""

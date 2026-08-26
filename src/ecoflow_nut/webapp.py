@@ -63,12 +63,21 @@ class EnergyFn(Protocol):
     async def __call__(self, *, since: float, until: float) -> dict[str, Any]: ...
 
 
+class SolarFn(Protocol):
+    """Solar production by local calendar day, over the last N days."""
+
+    async def __call__(self, *, days: int) -> dict[str, Any]: ...
+
+
 _VALID_OUTPUTS = ("ac", "usb", "dc")
 
 # Window guards. The span cap bounds the worst-case query on a Pi's SD card; the
 # point cap bounds the JSON we serialise for a browser that asks for too much.
 _MAX_SPAN_SECONDS = 30 * 24 * 3600
 _MAX_POINTS = 2000
+# A year of daily rows is 365 JSON objects and one grouped query -- cheap to
+# serve, and past it the daily bars are thinner than a finger on a phone.
+_MAX_SOLAR_DAYS = 366
 
 # The browser-facing assets, as an explicit allowlist: the ``/static/{name}``
 # handler is a dict lookup, so no request can escape this set (and aiohttp's
@@ -112,6 +121,7 @@ class WebServer:
         get_settings: GetSettingsFn,
         update_settings: UpdateSettingsFn,
         energy: EnergyFn,
+        solar: SolarFn,
         history_enabled: bool = False,
         eve_control: EveControlFn | None = None,
         switchbot_press: SwitchBotFn | None = None,
@@ -126,6 +136,7 @@ class WebServer:
         self._get_settings = get_settings
         self._update_settings = update_settings
         self._energy = energy
+        self._solar = solar
         self._history_enabled = history_enabled
         self._runner: web.AppRunner | None = None
         # Open /api/events streams. Each is a queue of pending payloads rather
@@ -151,6 +162,7 @@ class WebServer:
                 web.get("/api/events", self._handle_events),
                 web.get("/api/history", self._handle_history),
                 web.get("/api/energy", self._handle_energy),
+                web.get("/api/solar", self._handle_solar),
                 web.get("/api/autoshutdown", self._handle_autoshutdown_get),
                 web.get("/api/auth/check", self._handle_auth_check),
                 web.get("/api/settings", self._handle_settings_get),
@@ -350,6 +362,16 @@ class WebServer:
             return web.json_response({"enabled": False})
         since, until = _window_from_query(request, default_minutes=1440)
         return web.json_response(await self._energy(since=since, until=until))
+
+    async def _handle_solar(self, request: web.Request) -> web.Response:
+        """Solar by calendar day -- a different cut from the sliding window."""
+        from aiohttp import web
+
+        self._require_read_auth(request)
+        if not self._history_enabled:
+            return web.json_response({"enabled": False})
+        days = _int_query(request, "days", 30, 2, _MAX_SOLAR_DAYS)
+        return web.json_response(await self._solar(days=days))
 
     async def _handle_autoshutdown_get(self, request: web.Request) -> web.Response:
         from aiohttp import web

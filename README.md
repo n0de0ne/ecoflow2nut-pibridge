@@ -637,10 +637,16 @@ derived from the canvas width, and the caption tells you what you're looking at
 ("330 points · 4 min average"). Hovering snaps a crosshair to the nearest actual
 sample and reads out every series at that point; over a gap in the data it
 disappears rather than inventing a value, and lines break across outages instead
-of drawing through them. Every stored metric is chartable — SoC, AC in/out, USB,
-and total input/output watts — toggled from the legend and remembered per
-browser. With the canvas focused, arrow keys pan, `+`/`-` zoom, `Home`/`End` jump
-to the ends, and `1`–`5` pick a range preset.
+of drawing through them. Every stored metric is chartable — SoC, AC in/out,
+solar, USB, battery, and total input/output watts — toggled from the legend and
+remembered per browser. With the canvas focused, arrow keys pan, `+`/`-` zoom,
+`Home`/`End` jump to the ends, and `1`–`5` pick a range preset.
+
+**Battery** is the one signed series: positive is the pack charging, negative is
+the pack carrying the load. When it goes negative the watt axis opens a negative
+half, with zero kept on a gridline so the sign is readable without checking the
+labels. It is drawn dashed as well as coloured, because its colour sits close to
+two others under red-green colour blindness.
 
 **Energy** — when history logging is on, grid energy (kWh), the **Heures Creuses
 / Heures Pleines** split and cost, average and peak draw, and a projected €/day
@@ -655,6 +661,19 @@ is a share of input, not of what the load drew — between the two sits the batt
 whose own level moves over the window. On a station that reports no PV at all the
 split reads `–` rather than "100% grid": a station with no solar sensor is not
 the same as one that harvested nothing, and only the second supports the claim.
+
+*Solar production* is the one block on the page that ignores the shared window
+and cuts on **local calendar days** instead, because the useful questions about
+an array are calendar-shaped. It leads with today's harvest against yesterday's
+*at the same time of day* — comparing a morning against a finished day would
+report a collapse every morning — then one stacked bar per day (solar on the
+baseline so its top edge is comparable straight across the month, grid above it
+so the whole bar is the day's input). Tap or arrow-key a bar for that day's
+figures, including its best hour, which is the number that moves when something
+shades the panels. Underneath: this month against last month *per day*, the
+average whole day, the best day, and solar's share of everything that came in.
+Part-days are charted but never averaged, and days the bridge was off show as
+gaps rather than as days of no sun. 7 / 30 / 90 days, remembered per browser.
 
 **Settings** — a dedicated page for the "runtime-safe" config: the full
 auto-shutdown policy (trigger/recover SoC %, grace periods, min-load watts, which
@@ -721,6 +740,22 @@ to scan its whole table; an empty or future window is a normal empty result, not
 an error. `GET /api/energy` takes the same window. Buckets are anchored to the
 Unix epoch rather than to the window start, so a given bucket covers the same
 interval regardless of how you asked for it.
+
+`GET /api/solar?days=30` is the one endpoint that does *not* take a window: it
+cuts on local calendar days, because "did today beat yesterday" and "is this
+month down on the last one" are not questions a sliding window can answer.
+
+```bash
+curl 'http://bridge:8080/api/solar?days=90'   # 2..366, default 30
+```
+
+It returns one row per day (`solar_kwh`, `grid_kwh`, `load_kwh`, the day's best
+hour, and how many hours were actually recorded), plus this month's and last
+month's totals, the best whole day, and today's harvest against yesterday's *at
+the same time of day* — never against yesterday's total, which reads as a
+collapse every morning. Days are cut at midnight in the **bridge host's**
+timezone. Part-days are charted but kept out of every average, and a day the
+bridge recorded nothing for comes back as a gap rather than as a day of no sun.
 
 If you put the UI behind a reverse proxy on a sub-path, proxy `/static/` too —
 the page resolves its assets relative to itself, so a sub-path mount works, but

@@ -384,6 +384,11 @@ main {
 .card {
   border-radius: var(--radius-lg);
   padding: 16px;
+  /* A card is a grid item, and a grid item's automatic minimum is its
+     min-content -- so anything inside that scrolls on its own (the 90-day bar
+     strip) pushed the card, and with it the whole page, past the viewport
+     instead of scrolling within itself. */
+  min-width: 0;
 }
 
 h2 {
@@ -937,6 +942,53 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
 }
 @media (prefers-reduced-motion: reduce) {
   .share-seg { transition: none; }
+}
+
+/* ---------------------------------------------------------------------- *
+ * Daily solar bars
+ *
+ * Bars rather than a line: these are discrete calendar days, and the question
+ * is how much each one produced, so the length of the mark is the reading.
+ * Solar sits at the bottom of each bar so its top edge lands on a common
+ * baseline and days are comparable at a glance; grid rides above it, which
+ * makes the whole bar the day's input and the split the thing worth seeing.
+ *
+ * One listbox, not thirty buttons: a month of tab stops between the chart and
+ * the totals under it is not navigation anyone wants.
+ * ---------------------------------------------------------------------- */
+.daybars {
+  display: flex; align-items: flex-end; gap: 2px;
+  height: 108px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--glass-edge);
+  /* Ninety bars across a phone is a sparkline nobody can tap. Past the point
+     where a bar is a finger wide the strip scrolls instead of shrinking. */
+  overflow-x: auto; overflow-y: hidden;
+  /* Makes the strip its bars' offsetParent, so "scroll this day into view"
+     measures against the strip rather than against the card's padding box. */
+  position: relative;
+}
+.daybars:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+.daybar {
+  /* The column is full height and the bar sits at the bottom of it, so the
+     whole day is a hit target even when its bar is a few pixels tall. */
+  flex: 1 0 5px; min-width: 5px; height: 100%;
+  display: flex; flex-direction: column; justify-content: flex-end;
+  border-radius: 3px 3px 0 0; overflow: hidden; cursor: pointer;
+}
+.daybar i { display: block; width: 100%; }
+.daybar:hover { background: var(--fill-soft); }
+/* Drawn inside its own column: at a 2px gap an outset ring would sit on top of
+   the neighbouring day and read as though both were selected. */
+.daybar[aria-selected="true"] {
+  outline: 2px solid var(--accent); outline-offset: -2px;
+  background: var(--fill-soft);
+}
+/* A day the bridge recorded nothing for is not a day of no sun. */
+.daybar.missing { background: repeating-linear-gradient(
+  135deg, var(--fill-soft) 0 3px, transparent 3px 6px); }
+.daybars-axis {
+  display: flex; justify-content: space-between;
+  color: var(--text-dim); font-size: 11px; margin-bottom: .4rem;
 }
 
 /* Energy view: a short caveat under a figure that needs one. */

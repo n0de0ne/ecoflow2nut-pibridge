@@ -207,7 +207,7 @@
   <section data-view="history" hidden>
     <div class="card">
       <div class="toolbar">
-        <div class="range" role="group" aria-label="Time range">
+        <div class="range" id="chartRange" role="group" aria-label="Time range">
           <button data-min="60" type="button">1h</button>
           <button data-min="360" type="button">6h</button>
           <button data-min="1440" class="active" type="button">24h</button>
@@ -308,6 +308,57 @@
             PV charges the battery, so some is lost before it reaches the load.</div></div>
       </div>
       <p id="energyNote" class="muted"></p>
+    </div>
+
+    <div class="card" id="solarCard" hidden>
+      <div class="toolbar">
+        <h2>Solar production</h2>
+        <div class="range" id="solarRange" role="group" aria-label="Days shown">
+          <button data-days="7" type="button">7d</button>
+          <button data-days="30" class="active" type="button">30d</button>
+          <button data-days="90" type="button">90d</button>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="metric"><div class="label">Today so far</div>
+          <div class="value"><span id="solToday">–</span><span class="unit">kWh</span></div>
+          <div class="hint" id="solPace"></div></div>
+        <div class="metric"><div class="label">Yesterday, same time</div>
+          <div class="value"><span id="solYest">–</span><span class="unit">kWh</span></div>
+          <div class="hint" id="solYestTotal"></div></div>
+      </div>
+
+      <h2 class="sub">Day by day <span class="h2-total" id="solBarsTotal"></span></h2>
+      <div class="daybars" id="solarBars" role="listbox" tabindex="0"
+           aria-label="Daily solar and grid energy. Use arrow keys to read each day."></div>
+      <div class="daybars-axis"><span id="solAxisFrom"></span><span id="solAxisTo"></span></div>
+      <div class="share-keys">
+        <div class="share-key">
+          <div class="share-head"><i class="seg-solar"></i><span class="share-k">Solar</span></div>
+        </div>
+        <div class="share-key">
+          <div class="share-head"><i class="seg-grid"></i><span class="share-k">Grid</span></div>
+        </div>
+      </div>
+      <p class="muted hint" id="solDetail"></p>
+
+      <h2 class="sub">Totals</h2>
+      <div class="grid">
+        <div class="metric sm"><div class="label" id="solMonthK">This month</div>
+          <div class="value"><span id="solMonth">–</span></div>
+          <div class="hint" id="solPrevMonth"></div></div>
+        <div class="metric sm"><div class="label">Average whole day</div>
+          <div class="value"><span id="solAvg">–</span></div>
+          <div class="hint" id="solAvgD"></div></div>
+        <div class="metric sm"><div class="label">Best day</div>
+          <div class="value"><span id="solBest">–</span></div>
+          <div class="hint" id="solBestD"></div></div>
+        <div class="metric sm"><div class="label">Solar share of input</div>
+          <div class="value"><span id="solShare">–</span></div>
+          <div class="hint" id="solShareD"></div></div>
+      </div>
+      <p class="muted" id="solarNote"></p>
     </div>
   </section>
 

@@ -456,3 +456,54 @@ async def test_the_poll_stands_aside_for_an_auto_shutdown_confirmation(
         await task
 
     assert reads == 0
+
+
+# --- Solar by calendar day ------------------------------------------------- #
+
+
+class _SeriesStore:
+    """Records the windows and bucket widths energy_series was asked for."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, float, float]] = []
+
+    async def energy_series(
+        self, device: str, minutes: int, bucket: int, *, since: float, until: float
+    ) -> list[dict[str, object]]:
+        self.calls.append((bucket, since, until))
+        return []
+
+
+async def test_solar_asks_for_whole_local_days(tmp_path: Path) -> None:
+    """The window has to start at a local midnight, not N*86400 seconds ago.
+
+    Cut on elapsed seconds, the oldest "day" is a fragment starting at whatever
+    time of day it happens to be -- so the first bar is always short and the
+    daily average is always wrong.
+    """
+    from datetime import datetime, timedelta
+
+    from ecoflow_nut import solar
+
+    daemon = _daemon(tmp_path)
+    store = _SeriesStore()
+    daemon._store = store
+
+    await daemon._web_solar(days=30)
+
+    buckets = [c[0] for c in store.calls]
+    assert buckets == [3600, 900], "daily totals hourly; the pace comparison finer"
+
+    today = datetime.now().astimezone().date()
+
+    def midnight(days_back: int) -> float:
+        return solar.local_midnight(today - timedelta(days=days_back)).timestamp()
+
+    assert store.calls[0][1] == midnight(29)
+    # The pace query only ever spans yesterday and today, whatever the range.
+    assert store.calls[1][1] == midnight(1)
+
+
+async def test_solar_without_a_store_is_disabled(tmp_path: Path) -> None:
+    daemon = _daemon(tmp_path)
+    assert await daemon._web_solar(days=30) == {"enabled": False}
