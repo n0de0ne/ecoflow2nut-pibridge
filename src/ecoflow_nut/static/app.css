@@ -28,6 +28,7 @@
   --c-usb: #d3a4f0;
   --c-in: #6fd3d0;
   --c-out: #f0a06f;
+  --c-batt: #ec79ad;
   --radius-sm: 10px;
   --radius: 14px;
   --radius-lg: 22px;
@@ -89,6 +90,7 @@
     --c-usb: #7b3fa8;
     --c-in: #0f7f7c;
     --c-out: #c25a1c;
+    --c-batt: #a31f8d;
     --glass: rgba(255, 255, 255, .68);
     --glass-strong: rgba(255, 255, 255, .90);
     --glass-edge: rgba(16, 24, 40, .10);
@@ -129,6 +131,7 @@
   --c-usb: #7b3fa8;
   --c-in: #0f7f7c;
   --c-out: #c25a1c;
+  --c-batt: #a31f8d;
   --glass: rgba(255, 255, 255, .68);
   --glass-strong: rgba(255, 255, 255, .90);
   --glass-edge: rgba(16, 24, 40, .10);
@@ -581,6 +584,10 @@ button.ghost:hover:not(:disabled) { background: var(--fill); }
 }
 .legend-chip:hover { background: var(--fill); }
 .legend-chip i { width: 9px; height: 9px; border-radius: 2px; }
+/* A dashed series carries its dash into the legend too, or the legend becomes
+   the one place the second channel is missing. A 9px square fits a single dash
+   and still reads as a block, so the swatch stretches into a line segment. */
+.legend-chip i.dashed { width: 18px; height: 3px; border-radius: 1px; }
 .legend-chip.off { opacity: .55; }
 
 /* ---------------------------------------------------------------------- *

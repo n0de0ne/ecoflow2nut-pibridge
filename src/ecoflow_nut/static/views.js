@@ -524,10 +524,32 @@ const SERIES = [
   { key: "ac_output_watts", label: "AC out", unit: "W", color: "--c-acout", axis: "w" },
   { key: "ac_input_watts", label: "AC in", unit: "W", color: "--c-acin", axis: "w" },
   { key: "solar_input_watts", label: "Solar", unit: "W", color: "--c-solar", axis: "w" },
+  // The only signed series: positive is the pack charging, negative is the pack
+  // carrying the load. Dashed because its colour sits close to the others under
+  // red-green colour blindness, and because the shape marks it as the odd one
+  // out -- it is the one line that means something different below the axis.
+  {
+    key: "battery_watts", label: "Battery", unit: "W", color: "--c-batt",
+    axis: "w", dash: [5, 4], signed: true,
+  },
   { key: "usb_output_watts", label: "USB", unit: "W", color: "--c-usb", axis: "w" },
   { key: "input_watts", label: "Input", unit: "W", color: "--c-in", axis: "w" },
   { key: "output_watts", label: "Output", unit: "W", color: "--c-out", axis: "w" },
 ];
+/**
+ * The legend swatch, carrying the same dash the line does.
+ *
+ * A solid block beside a dashed line makes the legend the one place the second
+ * channel is missing -- exactly where someone goes to resolve two colours they
+ * cannot tell apart.
+ */
+function swatch(s) {
+  if (!s.dash) return `style="background:var(${s.color})"`;
+  const [on, off] = s.dash;
+  return `class="dashed" style="background:repeating-linear-gradient(90deg,` +
+    `var(${s.color}) 0 ${on}px,transparent ${on}px ${on + off}px)"`;
+}
+
 const HIDDEN_KEY = "ecoflow_hidden_series";
 const DEFAULT_HIDDEN = ["usb_output_watts", "input_watts", "output_watts"];
 
@@ -595,7 +617,7 @@ export const history = {
     host.innerHTML = SERIES.map(s => `
       <button type="button" class="legend-chip${hidden.has(s.key) ? " off" : ""}"
               data-series="${s.key}" aria-pressed="${!hidden.has(s.key)}">
-        <i style="background:var(${s.color})"></i>${s.label}
+        <i ${swatch(s)}></i>${s.label}
       </button>`).join("");
     this._onLegend = e => {
       const btn = e.target.closest("[data-series]");

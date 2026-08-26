@@ -14,6 +14,9 @@
 const MIN_SPAN_MS = 30 * 1000;
 const MAX_SPAN_MS = 30 * 24 * 3600 * 1000;
 const PAD = { top: 14, right: 54, bottom: 24, left: 44 };
+// Gridline intervals. The percentage axis uses the same four (0/25/50/75/100),
+// so both axes label the same lines and neither floats between them.
+const DIVISIONS = 4;
 // Below this spacing individual dots merge into noise, so we draw the line only.
 const DOT_MIN_STEP_PX = 8;
 const HIT_RADIUS_PX = 24;
@@ -29,14 +32,32 @@ const TICK_LADDER = [
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-/** Round up to the next 1/2/5 x 10^n, so axis labels read as round numbers. */
-function niceCeil(value) {
-  if (value <= 0) return 1;
-  const exp = Math.floor(Math.log10(value));
-  const base = Math.pow(10, exp);
-  const norm = value / base;
-  const step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
-  return step * base;
+/** Round gridline steps, ascending: 1, 2, 5 per decade, so labels stay whole. */
+function* niceSteps() {
+  for (let exp = 0; exp < 9; exp++) {
+    for (const mult of [1, 2, 5]) yield mult * Math.pow(10, exp);
+  }
+}
+
+/**
+ * A watt scale covering [trough, peak] in DIVISIONS steps of a round size.
+ *
+ * Battery watts are signed -- positive charging, negative supplying the load --
+ * so the axis has to be able to open a negative half. Zero always lands on a
+ * gridline, which is what makes the sign readable without reading the labels;
+ * any spare divisions go above it, where every other series lives.
+ */
+export function wattScale(trough, peak) {
+  // A floor of 10 W keeps a flat-zero chart from collapsing onto its baseline.
+  const up = Math.max(peak, 10);
+  const down = Math.max(-Math.min(trough, 0), 0);
+  for (const step of niceSteps()) {
+    const below = Math.ceil(down / step);
+    if (Math.ceil(up / step) + below <= DIVISIONS) {
+      return { min: -below * step, max: (DIVISIONS - below) * step };
+    }
+  }
+  return { min: 0, max: DIVISIONS * 1e8 };
 }
 
 /**
@@ -89,7 +110,9 @@ export function createChart(canvas, options = {}) {
   let live = true;
   let hidden = new Set();
   let hover = null;
-  let wattMax = 100;         // sticky, with hysteresis, so panning doesn't jitter
+  // Sticky, with hysteresis, so panning doesn't jitter. wattMin stays 0 until a
+  // visible series actually goes negative.
+  let wattMax = 100, wattMin = 0;
   let cssW = 0, cssH = 0;
   let frame = 0;
   let tooltip = null;
@@ -117,7 +140,11 @@ export function createChart(canvas, options = {}) {
   const plotH = () => Math.max(1, cssH - PAD.top - PAD.bottom);
   const xOf = t => PAD.left + ((t - t0) / (t1 - t0)) * plotW();
   const tOf = x => t0 + ((x - PAD.left) / plotW()) * (t1 - t0);
-  const yOf = (v, max) => PAD.top + plotH() - (v / max) * plotH();
+  const yOf = (v, min, max) => PAD.top + plotH() - ((v - min) / (max - min)) * plotH();
+  /** Same, but reading the range off whichever axis the series belongs to. */
+  const yFor = (v, spec) =>
+    spec.axis === "pct" ? yOf(v, 0, 100) : yOf(v, wattMin, wattMax);
+  const WATTS = { axis: "w" };   // for placing the axis's own labels and rules
 
   function colorOf(spec) {
     const styles = getComputedStyle(canvas);
@@ -199,19 +226,25 @@ export function createChart(canvas, options = {}) {
   }
 
   function rescaleWatts() {
-    let peak = 0;
+    let peak = 0, trough = 0;
     for (let i = 0; i < points.length; i++) {
       if (stamps[i] < t0 || stamps[i] > t1) continue;
       for (const s of visibleSeries()) {
         if (s.axis !== "w") continue;
         const v = points[i][s.key];
-        if (v != null) peak = Math.max(peak, v);
+        if (v == null) continue;
+        peak = Math.max(peak, v);
+        trough = Math.min(trough, v);
       }
     }
-    const target = niceCeil(Math.max(peak * 1.08, 10));
-    // Hysteresis: only rescale when the peak leaves a comfortable band, so the
-    // axis does not twitch on every frame while dragging.
-    if (target > wattMax || peak * 1.08 < wattMax * 0.6) wattMax = target;
+    const next = wattScale(trough, peak);
+    // Hysteresis: grow at once, but shrink only when both ends have real slack,
+    // so the axis does not twitch on every frame while dragging.
+    const roomy = peak < wattMax * 0.55 && trough >= wattMin * 0.55;
+    if (next.max > wattMax || next.min < wattMin || roomy) {
+      wattMax = next.max;
+      wattMin = next.min;
+    }
   }
 
   function drawGrid(css) {
@@ -234,8 +267,9 @@ export function createChart(canvas, options = {}) {
     // Horizontal gridlines double as the percentage axis.
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
-    for (let pct = 0; pct <= 100; pct += 25) {
-      const y = Math.round(yOf(pct, 100)) + 0.5;
+    for (let i = 0; i <= DIVISIONS; i++) {
+      const pct = (100 / DIVISIONS) * i;
+      const y = Math.round(yOf(pct, 0, 100)) + 0.5;
       ctx.beginPath();
       ctx.moveTo(PAD.left, y);
       ctx.lineTo(PAD.left + plotW(), y);
@@ -243,31 +277,45 @@ export function createChart(canvas, options = {}) {
       ctx.fillText(`${pct}%`, PAD.left - 6, y);
     }
     ctx.textAlign = "left";
-    for (let i = 0; i <= 4; i++) {
-      const v = (wattMax / 4) * i;
-      ctx.fillText(`${Math.round(v)}W`, PAD.left + plotW() + 6, yOf(v, wattMax) + 0.5);
+    for (let i = 0; i <= DIVISIONS; i++) {
+      const v = wattMin + ((wattMax - wattMin) / DIVISIONS) * i;
+      ctx.fillText(`${Math.round(v)}W`, PAD.left + plotW() + 6, yFor(v, WATTS) + 0.5);
+    }
+    // With a negative half open, which line is zero stops being obvious, and
+    // every signed series is read against it.
+    if (wattMin < 0) {
+      const y = Math.round(yFor(0, WATTS)) + 0.5;
+      ctx.strokeStyle = css.dim;
+      ctx.beginPath();
+      ctx.moveTo(PAD.left, y);
+      ctx.lineTo(PAD.left + plotW(), y);
+      ctx.stroke();
     }
   }
 
   function drawSeries(spec) {
-    const max = spec.axis === "pct" ? 100 : wattMax;
     const color = colorOf(spec);
     const gap = bucketMs ? bucketMs * GAP_FACTOR : Infinity;
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.8;
     ctx.lineJoin = "round";
+    // Dashes are the second channel on a series whose colour sits close to a
+    // neighbour's under red-green colour blindness: the shape says which is
+    // which when the hue cannot.
+    ctx.setLineDash(spec.dash ?? []);
     ctx.beginPath();
     let pen = false;
     for (let i = 0; i < points.length; i++) {
       const v = points[i][spec.key];
       if (v == null) { pen = false; continue; }
-      const x = xOf(stamps[i]), y = yOf(v, max);
+      const x = xOf(stamps[i]), y = yFor(v, spec);
       // Break the line across real outages instead of drawing through them.
       if (!pen || (i > 0 && stamps[i] - stamps[i - 1] > gap)) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
       pen = true;
     }
     ctx.stroke();
+    ctx.setLineDash([]);
 
     const step = plotW() / Math.max(1, points.length - 1);
     if (step >= DOT_MIN_STEP_PX) {
@@ -277,7 +325,7 @@ export function createChart(canvas, options = {}) {
         const v = points[i][spec.key];
         if (v == null || stamps[i] < t0 || stamps[i] > t1) continue;
         ctx.beginPath();
-        ctx.arc(xOf(stamps[i]), yOf(v, max), r, 0, Math.PI * 2);
+        ctx.arc(xOf(stamps[i]), yFor(v, spec), r, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -296,12 +344,11 @@ export function createChart(canvas, options = {}) {
     for (const s of visibleSeries()) {
       const v = points[hover][s.key];
       if (v == null) continue;
-      const max = s.axis === "pct" ? 100 : wattMax;
       ctx.fillStyle = colorOf(s);
       ctx.strokeStyle = css.bg;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(x, yOf(v, max), 4, 0, Math.PI * 2);
+      ctx.arc(x, yFor(v, s), 4, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }
@@ -348,8 +395,11 @@ export function createChart(canvas, options = {}) {
     let html = `<div class="chart-tip-time">${when}</div>`;
     for (const s of visibleSeries()) {
       const v = p[s.key];
+      // An explicit "+" on a signed series: "49W" beside "-49W" is ambiguous
+      // about which way the pack is going until you spot the minus.
+      const sign = s.signed && v > 0 ? "+" : "";
       html += `<div class="chart-tip-row"><i style="background:${colorOf(s)}"></i>` +
-        `${s.label}<b>${v == null ? "–" : Math.round(v) + s.unit}</b></div>`;
+        `${s.label}<b>${v == null ? "–" : sign + Math.round(v) + s.unit}</b></div>`;
     }
     tip.innerHTML = html;
     tip.style.display = "block";
