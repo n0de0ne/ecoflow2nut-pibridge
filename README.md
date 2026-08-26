@@ -881,8 +881,26 @@ mqtt:
 pip install "ecoflow-nut-bridge[mqtt]"   # systemd/install.sh already does this
 ```
 
-Put the password in `ECOFLOW_MQTT_PASSWORD` (a systemd drop-in) rather than in
-`config.yaml`, which is world-readable in `/etc`.
+Put the password in `ECOFLOW_MQTT_PASSWORD` rather than in `config.yaml`, which
+is world-readable in `/etc`:
+
+```bash
+sudo systemctl edit ecoflow-nut-bridge
+```
+
+```ini
+[Service]
+Environment="ECOFLOW_MQTT_PASSWORD=your-broker-password"
+```
+
+The same drop-in is where `ECOFLOW_WEB_TOKEN` and `ECOFLOW_PG_DSN` belong. It
+lands in `/etc/systemd/system/ecoflow-nut-bridge.service.d/override.conf`, which
+`systemd/update.sh` does not touch. `systemctl edit` creates it world-readable,
+so tighten it if the host has other users:
+
+```bash
+sudo chmod 600 /etc/systemd/system/ecoflow-nut-bridge.service.d/override.conf
+```
 
 Check the settings before restarting anything — this connects, announces the
 entities and reports, exiting non-zero if it cannot:
