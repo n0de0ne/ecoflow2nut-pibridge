@@ -136,6 +136,26 @@ postgres:
   min_interval_seconds: 0   # min seconds between persisted rows (0 = every frame)
   retention_days: 0         # auto-prune rows older than this (0 = keep forever)
 
+# Home Assistant over MQTT. The bridge announces itself once as a single HA
+# device carrying every sensor, binary sensor and switch -- no YAML on the HA
+# side, discovery does it. Requires the [mqtt] extra (systemd/install.sh already
+# installs it): pip install ecoflow-nut-bridge[mqtt]
+mqtt:
+  enabled: false
+  host: "127.0.0.1"         # your HA / Mosquitto host, e.g. "10.0.1.50"
+  port: 1883
+  username: ""
+  # Prefer the ECOFLOW_MQTT_PASSWORD env var over this file, which is
+  # world-readable in /etc. See the README for the systemd drop-in.
+  password: ""
+  base_topic: "ecoflow"     # where this bridge's own topics live
+  discovery_prefix: "homeassistant"   # only change if you changed it in HA
+  # Identifies the device in HA and namespaces its entities, which become
+  # sensor.<device_id>_<field>. Defaults to nut.device_name; set it explicitly
+  # only if two stations share one broker.
+  device_id: ""
+  tls: false
+
 # Electricity pricing for the web UI's cost estimate. Heures Creuses (off-peak)
 # vs Heures Pleines (peak). Cost is metered against AC INPUT (grid draw). All of
 # these are also editable live from the web UI's Settings panel (and persisted).
