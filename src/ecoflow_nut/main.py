@@ -7,8 +7,10 @@ import contextlib
 import logging
 import os
 import signal
+import statistics
 import sys
 import time
+from collections import deque
 from pathlib import Path
 
 import structlog
@@ -42,6 +44,13 @@ WATCHDOG_RECOVERY_HOLD_TICKS = 18
 # How often the retention window is applied. Deleting rows is cheap next to the
 # cost of scanning for them, so there is no reason to do it often.
 PRUNE_INTERVAL_SECONDS = 6 * 3600
+# Samples the conversion-loss figure is taken over. It is a residual --
+# a difference of larger numbers -- and the subsystems reporting those
+# numbers do not tick together: the inverter sends about a third as often
+# as the MPPT, so a load change momentarily pairs a fresh output reading
+# with a stale input one and the raw residual jumps. A median over roughly
+# ten seconds discards those without lagging a real change.
+CONVERSION_SAMPLES = 21
 
 
 def seed_state() -> DeviceState:
@@ -127,6 +136,8 @@ class Daemon:
         # render as "awaiting device", which is no way to tell them apart.
         self._link_state = "starting"
         self._link_error: str | None = None
+        # Recent conversion-loss residuals, smoothed before publishing.
+        self._conversion: deque[float] = deque(maxlen=CONVERSION_SAMPLES)
         # Optional subsystems (web UI / Postgres / MQTT), created in run().
         self._web: object | None = None
         self._store: object | None = None
@@ -402,6 +413,13 @@ class Daemon:
             "discharge_limit_percent": s.discharge_limit_percent,
             "ac_charge_watts": s.ac_charge_watts,
             "backup_reserve_percent": s.backup_reserve_percent,
+            # Where the watts are going, including the ones nothing meters.
+            **(s.power_balance() or {}),
+            "conversion_watts": (
+                round(statistics.median(self._conversion), 1)
+                if self._conversion
+                else None
+            ),
             # Lifetime Wh odometers, straight from the station. These are what
             # Home Assistant's Energy dashboard consumes.
             "solar_energy_wh": s.solar_energy_wh,
@@ -652,6 +670,8 @@ class Daemon:
         now = time.monotonic()
         # Always keep the dashboard's snapshot live: it is just a reference.
         self._latest_state = state
+        if (balance := state.power_balance()) is not None:
+            self._conversion.append(balance["conversion_watts"])
 
         # Rewriting the NUT file on every frame pegged a Pi Zero near 80% CPU
         # against a DELTA 2 generation device, which streams several subsystem

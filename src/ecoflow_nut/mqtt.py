@@ -142,6 +142,16 @@ SENSORS: tuple[dict[str, Any], ...] = (
     # to integrate -- an integration would only count the hours HA was up and
     # listening, and would restart from zero whenever the helper was recreated.
     # These odometers live on the station, so a bridge restart costs nothing.
+    # Not metered anywhere -- the residual of everything that is. Worth
+    # charting in HA: it is the tax the station charges around the clock, and
+    # it is the whole difference between the load and the runtime.
+    _sensor(
+        "conversion_watts",
+        "Conversion and idle draw",
+        unit="W",
+        device_class="power",
+        icon="mdi:transmission-tower-off",
+    ),
     _sensor(
         "solar_energy_wh",
         "Solar energy",

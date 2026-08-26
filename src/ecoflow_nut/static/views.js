@@ -292,8 +292,86 @@ function renderState(s) {
   renderBatteryMeter(s);
   renderFlow(s);
   renderPorts(s);
+  renderBalance(s);
   renderHealth(s);
   applyControlLock();
+}
+
+const W = v => `${Math.round(v)} W`;
+
+/**
+ * Where every watt is going, including the ones nothing meters.
+ *
+ * The station meters ports. It does not meter the inverter, the charger, the
+ * DC-DC regulators or its own electronics -- but they all sit on the same DC
+ * bus, so whatever is unaccounted for is what they are burning. That residual
+ * is the answer to the question the flow diagram raises and cannot settle:
+ * why the battery is gaining less than the solar coming in.
+ */
+function renderBalance(s) {
+  const card = el("#balanceCard");
+  const loss = s.conversion_watts;
+  const known = loss != null && s.supply_watts != null && s.draw_watts != null;
+  card.hidden = !known;
+  if (!known) return;
+
+  const parts = (pairs) => pairs
+    .filter(([, w]) => w != null && Math.round(w) > 0)
+    .map(([name, w]) => `${name} ${Math.round(w)}`)
+    .join(" · ");
+
+  el("#balIn").textContent = W(s.supply_watts);
+  el("#balInParts").textContent = parts([
+    ["grid", s.ac_input_watts], ["solar", s.solar_input_watts],
+  ]);
+  el("#balOut").textContent = W(s.draw_watts);
+  el("#balOutParts").textContent = parts([
+    ["AC", s.ac_output_watts], ["12V", s.dc_output_watts],
+    ["USB", s.usb_output_watts], ["USB-C", s.usbc_output_watts],
+  ]);
+
+  const batt = s.battery_watts ?? 0;
+  el("#balBattK").textContent = batt >= 0 ? "Into the battery" : "From the battery";
+  el("#balBatt").textContent = `${batt >= 0 ? "+" : "−"}${W(Math.abs(batt))}`;
+  el("#balBattD").textContent = "";
+
+  // A negative residual is two sensors disagreeing, not a station making
+  // power. Say so rather than printing it as if it meant something.
+  const bogus = loss < 0;
+  el("#balLoss").textContent = bogus ? "–" : W(loss);
+  el("#balLossD").textContent = bogus
+    ? "sensors disagree"
+    : s.supply_watts > 0 ? `${(loss / s.supply_watts * 100).toFixed(1)}% of throughput` : "";
+
+  el("#balNote").textContent = bogus
+    ? "The metered ports currently add up to slightly more than the input, " +
+      "which is measurement noise rather than a reading."
+    : balanceNote(s, loss);
+}
+
+/** One sentence naming what the overhead means right now. */
+function balanceNote(s, loss) {
+  const draw = s.draw_watts ?? 0;
+  const solar = s.solar_input_watts ?? 0;
+  const batt = s.battery_watts ?? 0;
+  // The runtime consequence is the part that matters, and it grows as the load
+  // shrinks: 14 W beside a 190 W load is nothing, beside a 30 W load it is a
+  // third of the runtime.
+  const cost = draw > 0
+    ? ` At this draw it costs about ${((draw + loss) / draw - 1) * 100 < 1
+        ? "1" : Math.round(((draw + loss) / draw - 1) * 100)}% of your runtime on battery.`
+    : "";
+  if (batt > 0 && solar > 0) {
+    return `Solar is bringing in ${W(solar)} and the pack is gaining ` +
+      `${W(batt)}; the ${W(loss)} between them is the inverter, the charger ` +
+      `and the unit's own electronics.${cost}`;
+  }
+  if (batt < 0) {
+    return `The pack is supplying ${W(-batt)} to cover a ${W(draw)} draw — ` +
+      `the extra ${W(loss)} is what the box costs to run.${cost}`;
+  }
+  return `Everything metered, minus everything metered out, leaves ${W(loss)} ` +
+    `for the inverter, the charger and the unit's own electronics.${cost}`;
 }
 
 /**

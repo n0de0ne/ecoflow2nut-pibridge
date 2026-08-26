@@ -575,6 +575,29 @@ A **Solar input** tile and chart series show PV harvest on models that report it
 (the DELTA 2 generation); it reads `–` rather than `0` on models that do not, so
 "not reported" stays distinguishable from "reporting zero".
 
+A **Power balance** card accounts for every watt, including the ones nothing
+meters. The station meters ports; it does not meter the inverter, the charger,
+the DC-DC regulators or its own electronics — but they share one DC bus, so
+whatever is left over is what they are burning:
+
+```
+conversion = (grid + solar) − (AC + 12V + USB) − battery
+```
+
+That residual is what answers "why is the battery gaining less than the solar
+coming in". Measured on an E2000 at 251 W in, 188 W out and a pack taking
+49 W: 14 W, or 5.6% of throughput — and 64 W of solar minus that 14 W lands
+within a watt of the 49 W the pack was actually gaining. It matters most at
+low loads, where it stops being a rounding error and starts being most of the
+draw: 14 W beside a 190 W load costs 7% of the runtime, beside a 20 W load it
+costs 70%. Published to MQTT too, so Home Assistant can chart it.
+
+The figure is a median over about ten seconds rather than an instant reading:
+the subsystems do not tick together (the inverter reports about a third as
+often as the MPPT), so a load change briefly pairs a fresh output reading with
+a stale input one. A negative residual means two sensors disagree, and reads as
+`–` rather than as a station making power.
+
 A **Battery health** card appears on models whose BMS reports it (the DELTA 2
 generation): pack temperature with the hot/cold cell range beside it, the
 cell-voltage spread (which widens long before capacity or SoH move, and is the

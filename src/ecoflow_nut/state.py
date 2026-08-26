@@ -158,6 +158,50 @@ class DeviceState:
             if any(p is not None for p in ports):
                 setattr(self, total, round(sum(p or 0.0 for p in ports), 1))
 
+    def power_balance(self) -> dict[str, float] | None:
+        """Where the watts are going right now, including the ones that vanish.
+
+        Everything the station meters is a port; nothing meters the inverter,
+        the charger, the DC-DC regulators or the unit's own electronics. But
+        they are all on the same DC bus, so what goes in must equal what comes
+        out plus what the battery takes plus what is lost:
+
+            conversion = (grid + solar) - (AC + 12V + USB) - battery
+
+        Confirmed on an E2000 at 251 W in, 188 W out and a pack taking 49 W:
+        the 14 W residual is 5.6% of throughput, and solar minus that residual
+        (64 - 14 = 50 W) lands within a watt of what the pack was actually
+        gaining. That is the answer to "why is the charge rate below the solar
+        input" -- nothing is going anywhere else, the box is simply burning it.
+
+        Returns None unless the pack reading and both AC figures are present:
+        the residual is a difference of larger numbers, so one missing term
+        does not make it approximate, it makes it wrong. Ports the model does
+        not have count as zero, which is what they are.
+        """
+        if (
+            self.battery_watts is None
+            or self.ac_input_watts is None
+            or self.ac_output_watts is None
+        ):
+            return None
+        supply = self.ac_input_watts + (self.solar_input_watts or 0.0)
+        draw = (
+            self.ac_output_watts
+            + (self.dc_output_watts or 0.0)
+            + (self.usb_output_watts or 0.0)
+            + (self.usbc_output_watts or 0.0)
+        )
+        return {
+            "supply_watts": round(supply, 1),
+            "draw_watts": round(draw, 1),
+            "battery_watts": self.battery_watts,
+            # Signed on purpose. A negative residual is not a station making
+            # power, it is two sensors disagreeing, and the caller needs to be
+            # able to tell that apart from a genuinely efficient moment.
+            "conversion_watts": round(supply - draw - self.battery_watts, 1),
+        }
+
     def update_soc(self, value: float, source: str) -> None:
         """Set SoC from ``source``, unless a more trusted source already has.
 

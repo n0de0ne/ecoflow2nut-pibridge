@@ -942,6 +942,40 @@ dialog menu { display: flex; justify-content: flex-end; gap: .5rem; padding: 0; 
 h2.sub { margin-top: 20px; }
 
 /* --------------------------------------------------------------------- */
+/* Power balance                                                          */
+/* --------------------------------------------------------------------- */
+/* A balance sheet, not a chart: four measured-or-derived quantities that
+   have to add up, which reads better as aligned figures than as marks. The
+   flow diagram directly above already carries the picture. */
+.balance { display: grid; grid-template-columns: auto 1fr auto; gap: 7px 12px; }
+.brow { display: contents; }
+.bk { color: var(--text); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.bd {
+  color: var(--text-dim);
+  font-size: 12px;
+  align-self: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bv {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* The residual is the answer the card exists for, so it is ruled off from the
+   measured rows above it rather than sitting as a fourth equal line. Its own
+   grid row, because `display: contents` leaves the row with no box to put a
+   border on -- bordering each cell instead breaks the rule at every column
+   gap. */
+.brule { grid-column: 1 / -1; border-top: 1px solid var(--glass-edge); margin-top: 1px; }
+.brow.loss .bk, .brow.loss .bv { color: var(--c-out); }
+
+/* --------------------------------------------------------------------- */
 /* Charge / discharge meter                                               */
 /* --------------------------------------------------------------------- */
 /* Polarity, so the encoding is diverging: one hue each side of a neutral
