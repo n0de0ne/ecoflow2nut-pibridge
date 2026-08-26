@@ -908,38 +908,87 @@ and HA sees current values the instant it subscribes. Availability is a
 retained last-will, so HA marks the device unavailable if the bridge dies
 rather than showing a frozen reading forever.
 
-#### Attributing your homelab's consumption to solar vs grid
+#### The Energy dashboard: solar, grid, battery
 
 The Energy dashboard wants **cumulative energy**, not power it has to
-integrate. The bridge publishes the station's own lifetime Wh odometers for
-exactly this — `device_class: energy` with `state_class: total_increasing`:
+integrate. Six entities are published for it, all `device_class: energy` with
+`state_class: total_increasing`:
 
-| Entity | Maps to |
-|---|---|
-| **Solar energy** | Energy dashboard → *Solar panels* → "Solar production energy" |
-| **Grid energy in** | → *Grid consumption* |
-| **AC output energy** | → *Individual devices*, to see what the homelab drew |
+| Entity | What it counts | Where it comes from |
+|---|---|---|
+| **Solar energy** | PV into the station | the station's own odometer |
+| **Grid energy in** | AC taken from the wall | the station's own odometer |
+| **AC output energy** | what left the inverter | the station's own odometer |
+| **12V DC output energy** | what left the DC ports | the station's own odometer |
+| **Battery energy in** | watt-hours into the pack | integrated by the bridge |
+| **Battery energy out** | watt-hours out of the pack | integrated by the bridge |
 
-Settings → Dashboards → Energy, then add each in the matching slot. HA does
-the solar-vs-grid split from there, and because these counters live on the
-station rather than in HA, they survive a bridge restart, an HA restart and
-any gap between the two. An integration helper over `Solar input` (watts)
-would only count the hours HA happened to be up and listening.
+Settings → Dashboards → **Energy**, then fill the slots. Which entities go
+where depends on one thing: whether HA already knows what your house draws.
 
-Two caveats specific to this generation:
+**If the station is the whole picture** (no house-wide grid meter in HA):
+
+* *Grid consumption* → **Grid energy in**
+* *Solar production* → **Solar energy**
+* *Home battery storage* → **Battery energy in** / **Battery energy out**
+
+HA then works out consumption itself, as
+`grid + solar + battery_out − battery_in`, which is what your homelab drew plus
+what the station spent converting it. That is the whole picture for anything
+plugged into the station.
+
+**If you already meter the whole house** (a Shelly EM, a Linky reader, a
+utility integration): keep that as your grid source and **do not add Grid
+energy in as a second one** — the station is plugged into the house, so its
+draw is already inside the house total and adding it counts the same
+kilowatt-hours twice. Add **Solar energy** as solar production and the battery
+pair as storage; put **AC output energy** under *Individual devices* to see the
+homelab's share.
+
+Why the battery pair matters either way: HA derives consumption as
+`grid + solar + battery_out − battery_in`. Leave the battery out and every
+watt-hour the panels put into the pack is charted as though the house burned
+it — which on a station that charges from PV all afternoon and runs the load
+overnight is not a rounding error, it is the entire point.
+
+Four of the six live on the station, so they survive a bridge restart, an HA
+restart and any gap between the two. An integration helper over *Solar input*
+(watts) would only ever count the hours HA happened to be up and listening.
+The battery pair has no equivalent on the wire — nothing reports lifetime
+watt-hours for the pack — so the bridge integrates the pack's signed power and
+persists the totals next to its settings file. They only count while the bridge
+is running, and they restart at zero if that file is lost (HA reads that as a
+meter replacement, not as a negative day).
+
+Three caveats specific to this generation:
 
 * Solar is the **XT60 input**, which is also the car/DC charging input. If you
-  ever charge from a car socket through the same connector it lands in the
-  same counter. On this firmware `sun_chg_power` stays 0 and the harvest is
-  booked under `dc_chg_power`, so the bridge sums both names (see
+  ever charge from a car socket through the same connector it lands in the same
+  counter. On this firmware `sun_chg_power` stays 0 and the harvest is booked
+  under `dc_chg_power`, so the bridge sums both names (see
   [`docs/PROTOCOL.md`](docs/PROTOCOL.md)).
 * **AC output energy is what left the station**, not what the grid supplied —
   between the two sit the battery and the inverter. Over a day it converges;
   over an hour it will not.
+* The counter names are reconstructed, not documented. Before you trust one in
+  your energy accounting, watch it move:
 
-The bridge's own Energy page answers a narrower question — the solar/grid
-split of what came *in* over a chosen window, priced against your HC/HP
-tariff. HA's Energy dashboard is the better home for long-run attribution.
+  ```bash
+  ecoflow-nut sniff --seconds 600
+  ```
+
+  The `--- counters that moved ---` section reports each odometer's rise per
+  hour beside the mean watts measured over the same capture. A `*_power` field
+  holds watt-hours, so its rise per hour is watts: with a steady load,
+  `ac_chg_power` should track `watts_in_sum` and `ac_dsg_power` should track
+  `watts_out_sum`. Anything pinned at zero for ten minutes while that port is
+  plainly working is a field this firmware does not populate, and the same
+  section names those too.
+
+The bridge's own Energy page answers a narrower question — the solar/grid split
+of what came *in* over a chosen window, priced against your HC/HP tariff, plus
+solar production by calendar day. HA's Energy dashboard is the better home for
+long-run attribution across the whole house.
 
 ## 7. NUT client setup
 

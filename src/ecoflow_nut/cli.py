@@ -6,6 +6,7 @@ import asyncio
 import json
 import socket as _socket
 import sys
+import time
 from typing import Any
 
 import click
@@ -369,6 +370,51 @@ def sniff(ctx: click.Context, seconds: int, out_path: str | None, verbose: bool)
     asyncio.run(_sniff(config, seconds, out_path, verbose))
 
 
+def _report_counters(
+    watch: sniffer.FieldWatch, latest: dict[sniffer.FrameKey, dict]
+) -> None:
+    """What moved, and how fast -- the half of a capture a snapshot cannot show.
+
+    Lifetime counters are the fields most easily mistaken for something else,
+    and the mistake is invisible in a single frame. Printing each one's rise per
+    hour beside the mean of every watts field lets you check the pairing against
+    a load you can see: on this protocol a ``*_power`` counter holds watt-hours,
+    so its rise per hour is watts and should track the port it claims to count.
+    """
+    counters = watch.counters()
+    if not counters:
+        return
+
+    def frame(key: sniffer.FrameKey) -> str:
+        """The layout's own name, which reads far better than a hex triple."""
+        return latest.get(key, {}).get("message") or sniffer.format_key(key)
+    click.echo("\n--- counters that moved ---")
+    click.echo(
+        "  A '*_power' field counts Wh, so per-hour is watts. Compare each with\n"
+        "  the means below and with what the unit's own screen showed."
+    )
+    for row in counters:
+        name = f"{frame(row['key'])}.{row['field']}"
+        click.echo(
+            f"  {name:<34} {row['first']} -> {row['last']}"
+            f"  (+{row['rise']} in {row['seconds']:.0f}s = {row['per_hour']:.0f}/h)"
+        )
+
+    means = watch.means("watt")
+    if means:
+        click.echo("\n  mean watts over the capture:")
+        for row in means:
+            name = f"{frame(row['key'])}.{row['field']}"
+            click.echo(f"    {name:<32} {row['mean']:.1f} W  (n={row['samples']})")
+
+    # A counter pinned at zero is how you spot a field this firmware does not
+    # populate -- sun_chg_power on the DELTA 2 Max reads 0 for a lifetime while
+    # PV is actively charging, and only a capture shows it.
+    zeros = [name for _, name in watch.stuck_at_zero() if name.endswith("_power")]
+    if zeros:
+        click.echo(f"\n  never left zero: {', '.join(sorted(set(zeros)))}")
+
+
 async def _sniff(
     config: Config, seconds: int, out_path: str | None, verbose: bool
 ) -> None:
@@ -376,6 +422,7 @@ async def _sniff(
     counts: dict[sniffer.FrameKey, int] = {}
     latest: dict[sniffer.FrameKey, dict] = {}
     warnings: dict[sniffer.FrameKey, str] = {}
+    watch = sniffer.FieldWatch()
     handle = open(out_path, "w") if out_path else None  # noqa: SIM115
 
     def _on_packet(packet) -> None:
@@ -384,6 +431,8 @@ async def _sniff(
         counts[key] = counts.get(key, 0) + 1
         info = sniffer.describe_packet(driver, packet)
         latest[key] = info
+        watch.observe(key, info.get("fields") or info.get("protobuf") or {},
+                      time.monotonic())
         if (note := sniffer.layout_coverage(driver, packet)) is not None:
             warnings[key] = note
         if handle is not None:
@@ -423,6 +472,8 @@ async def _sniff(
                 click.echo(f"    {name} = {value}")
         else:
             click.echo(f"    payload = {info['payload_hex']}")
+
+    _report_counters(watch, latest)
 
     click.echo("\n--- merged state ---")
     click.echo(json.dumps(_state_summary(client.state), indent=2))

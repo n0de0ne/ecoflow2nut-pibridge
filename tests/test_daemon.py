@@ -507,3 +507,62 @@ async def test_solar_asks_for_whole_local_days(tmp_path: Path) -> None:
 async def test_solar_without_a_store_is_disabled(tmp_path: Path) -> None:
     daemon = _daemon(tmp_path)
     assert await daemon._web_solar(days=30) == {"enabled": False}
+
+
+# --- Battery watt-hour totals ---------------------------------------------- #
+
+
+def _charge(daemon, monkeypatch, *, frames: int, step: float, watts: float) -> None:
+    """Feed ``frames`` readings ``step`` seconds apart, on a controlled clock."""
+    from ecoflow_nut import main as main_mod
+    from ecoflow_nut.state import DeviceState
+
+    clock = [0.0]
+    monkeypatch.setattr(main_mod.time, "monotonic", lambda: clock[0])
+    for _ in range(frames):
+        clock[0] += step
+        daemon._on_state(DeviceState(soc_percent=50, battery_watts=watts))
+
+
+async def test_every_frame_counts_towards_the_battery_totals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The NUT write throttle must not throttle the energy meter.
+
+    _on_state returns early when NUT is not due a rewrite, which on this
+    generation is most frames -- it sends several subsystem heartbeats a second.
+    Folding the meter in after that return would silently undercount the pack by
+    whatever fraction the throttle discards, and the shortfall would look like a
+    plausible number rather than a bug.
+    """
+    daemon = _daemon(tmp_path)
+    # An hour between NUT writes: nothing below is ever "due".
+    daemon._config.nut.min_write_interval_seconds = 3600
+    _charge(daemon, monkeypatch, frames=7, step=10.0, watts=3600.0)
+
+    # Six intervals of 10 s at 3600 W; the first frame only starts the clock.
+    assert daemon._energy.totals() == {
+        "battery_charge_energy_wh": 60,
+        "battery_discharge_energy_wh": 0,
+    }
+
+
+async def test_the_battery_totals_reach_home_assistant(tmp_path: Path) -> None:
+    from ecoflow_nut.state import DeviceState
+
+    daemon = _daemon(tmp_path)
+    daemon._latest_state = DeviceState(soc_percent=50)
+    payload = daemon._web_state()
+    assert payload["battery_charge_energy_wh"] == 0
+    assert payload["battery_discharge_energy_wh"] == 0
+
+
+async def test_the_battery_totals_survive_a_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reset every deploy would make the pair useless as lifetime counters."""
+    daemon = _daemon(tmp_path)
+    _charge(daemon, monkeypatch, frames=7, step=10.0, watts=3600.0)
+    daemon._energy.save(force=True)
+
+    assert _daemon(tmp_path)._energy.totals()["battery_charge_energy_wh"] == 60

@@ -166,6 +166,27 @@ SENSORS: tuple[dict[str, Any], ...] = (
         device_class="energy",
         state_class="total_increasing",
     ),
+    # The station counts its ports but not its pack, so these two are integrated
+    # by the bridge and persisted across restarts. HA's Energy dashboard works
+    # out what the house used as grid + solar + battery_out - battery_in, so
+    # without the pair every watt-hour that went into storage is charted as
+    # though the house had burned it.
+    _sensor(
+        "battery_charge_energy_wh",
+        "Battery energy in",
+        unit="Wh",
+        device_class="energy",
+        state_class="total_increasing",
+        icon="mdi:battery-arrow-up",
+    ),
+    _sensor(
+        "battery_discharge_energy_wh",
+        "Battery energy out",
+        unit="Wh",
+        device_class="energy",
+        state_class="total_increasing",
+        icon="mdi:battery-arrow-down",
+    ),
     _sensor(
         "ac_output_energy_wh",
         "AC output energy",

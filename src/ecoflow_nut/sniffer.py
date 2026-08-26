@@ -104,3 +104,76 @@ def layout_coverage(driver: Any, packet: Packet) -> str | None:
         f"{label}: payload {actual} B is longer than the {expected} B layout; "
         f"{actual - expected} trailing byte(s) are not mapped"
     )
+
+
+class FieldWatch:
+    """Watches how each decoded field moves across a capture.
+
+    A lifetime odometer is the one field kind a single frame cannot identify:
+    ``ac_chg_power = 4642`` looks identical whether it counts watt-hours taken
+    from the wall or watt-hours pushed into the pack, and getting that wrong
+    sends a number straight into someone's energy accounting. What tells them
+    apart is watching it climb against a load you can measure -- which is what
+    this records: the rise of every field that only ever rises, and the mean of
+    every field that does not, so the two can be read side by side.
+
+    Ten minutes at a steady load is enough to be sure. Rates are per hour, so a
+    counter of watt-hours reports its rise directly in watts.
+    """
+
+    def __init__(self) -> None:
+        # (frame key, field) -> stats, because a name can occur in two layouts.
+        self._seen: dict[tuple[FrameKey, str], dict[str, Any]] = {}
+
+    def observe(self, key: FrameKey, fields: dict[str, Any], at: float) -> None:
+        for name, value in fields.items():
+            # Bools are ints in Python and are flags here, not measurements.
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            stat = self._seen.get((key, name))
+            if stat is None:
+                self._seen[(key, name)] = {
+                    "first": value, "last": value, "at": at, "last_at": at,
+                    "sum": float(value), "n": 1, "rising": True,
+                }
+                continue
+            if value < stat["last"]:
+                stat["rising"] = False
+            stat["last"] = value
+            stat["last_at"] = at
+            stat["sum"] += float(value)
+            stat["n"] += 1
+
+    def counters(self) -> list[dict[str, Any]]:
+        """Fields that only rose, and by how much per hour. Biggest rise first."""
+        out = []
+        for (key, name), stat in self._seen.items():
+            span = stat["last_at"] - stat["at"]
+            rise = stat["last"] - stat["first"]
+            if not stat["rising"] or rise <= 0 or span <= 0:
+                continue
+            out.append({
+                "key": key, "field": name, "first": stat["first"],
+                "last": stat["last"], "rise": rise, "seconds": span,
+                "per_hour": rise * 3600.0 / span,
+            })
+        return sorted(out, key=lambda r: -r["rise"])
+
+    def means(self, match: str) -> list[dict[str, Any]]:
+        """Mean of every field whose name contains ``match``, for comparison."""
+        out = [
+            {"key": key, "field": name, "mean": stat["sum"] / stat["n"],
+             "samples": stat["n"]}
+            for (key, name), stat in self._seen.items()
+            if match in name
+        ]
+        return sorted(out, key=lambda r: r["field"])
+
+    def stuck_at_zero(self) -> list[tuple[FrameKey, str]]:
+        """Fields that never left zero -- the shape of a field this firmware
+        does not populate, which is worth knowing before trusting one."""
+        return sorted(
+            (key, name)
+            for (key, name), stat in self._seen.items()
+            if stat["first"] == 0 and stat["last"] == 0 and stat["n"] > 1
+        )

@@ -23,6 +23,7 @@ from .autoshutdown import AutoShutdownController, EveIdleConfirmer, ShutdownActi
 from .ble_client import EcoFlowBLE
 from .config import Config, load_config
 from .devices import OUTPUT_KINDS, DeviceDriver
+from .energy_meter import EnergyMeter
 from .eve_outlet import EveOutlet
 from .nut_writer import NutWriter, derive_status
 from .settings_store import SettingsStore
@@ -99,6 +100,14 @@ class Daemon:
         # Overlay any persisted live-edited settings before building subsystems.
         self._settings = SettingsStore(config.settings_file)
         self._settings.load_into(config)
+        # Lifetime battery watt-hours. The station counts every port but not its
+        # own pack, and HA's Energy dashboard needs both halves of it; kept
+        # beside the settings file so it survives a restart the way the
+        # station's own odometers do.
+        self._energy = EnergyMeter(
+            Path(config.settings_file).with_name("energy_meter.json")
+        )
+        self._energy.load()
         # Protocol driver for the configured model; raises on an unknown model.
         self._driver: DeviceDriver = devices.get_driver(config.ecoflow.model)
         self._writer = NutWriter(config.nut)
@@ -213,6 +222,9 @@ class Daemon:
             if control is not None:
                 control.close()
             self._remove_control_socket()
+            # Before anything else can fail: the saved totals are only ever a
+            # minute behind, and a clean shutdown should not throw that away.
+            self._energy.save(force=True)
             await self._stop_mqtt()
             await self._stop_web()
             await self._stop_store()
@@ -428,6 +440,8 @@ class Daemon:
             "grid_energy_wh": s.grid_energy_wh,
             "ac_output_energy_wh": s.ac_output_energy_wh,
             "dc_output_energy_wh": s.dc_output_energy_wh,
+            # The pair the station does not keep, integrated here.
+            **self._energy.totals(),
             "status": self._latest_status,
             "runtime_seconds": self._latest_runtime,
             "updated_seconds_ago": age,
@@ -700,6 +714,11 @@ class Daemon:
         self._latest_state = state
         if (balance := state.power_balance()) is not None:
             self._conversion.append(balance["conversion_watts"])
+        # Before the write-throttle below returns: every frame counts towards
+        # the energy totals, whether or not NUT is due a rewrite.
+        if state.battery_watts is not None:
+            self._energy.add(state.battery_watts, now)
+            self._energy.save(now)
 
         # Rewriting the NUT file on every frame pegged a Pi Zero near 80% CPU
         # against a DELTA 2 generation device, which streams several subsystem
