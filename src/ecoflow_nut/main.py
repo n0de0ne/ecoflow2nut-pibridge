@@ -385,6 +385,11 @@ class Daemon:
             **common,
             **eve,
             "soc_percent": s.soc_percent,
+            # Which subsystem the figure came from -- "ems" is the LCD/app
+            # number, "bms" the pack's own, "pd" a coarse integer. They differ
+            # by a point or two on the same station, so the first question about
+            # a reading that disagrees with the app is which one you are seeing.
+            "soc_source": s.soc_source,
             "ac_input_watts": s.ac_input_watts,
             "ac_input_voltage": s.ac_input_voltage,
             "solar_input_watts": s.solar_input_watts,

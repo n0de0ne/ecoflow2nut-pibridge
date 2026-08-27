@@ -45,6 +45,16 @@ function portState(on, watts, unknownNote) {
   return ["on", w > 0 ? `ON · ${w}W` : "ON · idle", ""];
 }
 
+/**
+ * State of charge, at the resolution the device reports it.
+ *
+ * One formatter for both places it appears. The orb rounded to a whole number
+ * sat 40 px above a tile reading 73.5, which is the same quantity contradicting
+ * itself on one screen -- and reads as one of the two being broken rather than
+ * as a rounding choice.
+ */
+const socText = v => (v == null ? "\u2013" : v.toFixed(1));
+
 // Battery geometry, mirroring the SVG in index.html.
 const ORB = { top: 96, bottom: 204, left: 126, right: 234 };
 
@@ -215,7 +225,7 @@ function renderFlow(s) {
     (s.usb_output_watts ?? 0) + (s.usbc_output_watts ?? 0));
 
   const soc = s.soc_percent;
-  el("#flowSoc").textContent = soc == null ? "–" : `${Math.round(soc)}%`;
+  el("#flowSoc").textContent = soc == null ? "–" : `${socText(soc)}%`;
   const fill = el("#flowFill");
   fill.setAttribute("d", orbSurface(soc));
   fill.classList.toggle("crit", soc != null && soc < 15);
@@ -282,7 +292,7 @@ function renderState(s) {
   // Only what the diagram cannot state itself: every port's watts are on it
   // already, so repeating them here was four tiles saying nothing new.
   const num = (id, value) => { el(id).textContent = value; };
-  num("#soc", s.soc_percent ?? "–");
+  num("#soc", socText(s.soc_percent));
   num("#acInV", s.ac_input_voltage == null
     ? "–" : `${Math.round(s.ac_input_voltage)} V`);
   // Time-remaining lives on the battery itself; repeating it here would make
