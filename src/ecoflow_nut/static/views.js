@@ -55,6 +55,24 @@ function portState(on, watts, unknownNote) {
  */
 const socText = v => (v == null ? "\u2013" : v.toFixed(1));
 
+/**
+ * Where the state of charge came from, since a station reports up to three.
+ *
+ * The EMS's LCD float is the figure the unit's screen and the EcoFlow app show;
+ * the pack's own float and the PD's integer byte are fallbacks for when it is
+ * silent, and they disagree with the app by a point or two. Ranking them is not
+ * enough on its own -- a silent fallback is exactly how a reading stops matching
+ * the app with nothing on screen to say why -- so the fallbacks are named.
+ */
+const SOC_SOURCES = {
+  ems: ["", "From the EMS, which is the figure the unit's own screen and the "
+        + "EcoFlow app show."],
+  bms: ["pack", "From the battery pack itself. The EcoFlow app shows the EMS's "
+        + "LCD figure instead, which can read a point or two differently."],
+  pd: ["coarse", "From the PD controller, as a whole number -- the coarsest of "
+       + "the three sources, used only when the other two are silent."],
+};
+
 // Battery geometry, mirroring the SVG in index.html.
 const ORB = { top: 96, bottom: 204, left: 126, right: 234 };
 
@@ -293,6 +311,9 @@ function renderState(s) {
   // already, so repeating them here was four tiles saying nothing new.
   const num = (id, value) => { el(id).textContent = value; };
   num("#soc", socText(s.soc_percent));
+  const [note, why] = SOC_SOURCES[s.soc_source] ?? ["", ""];
+  el("#socNote").textContent = note;
+  el("#socTile").title = why;
   num("#acInV", s.ac_input_voltage == null
     ? "–" : `${Math.round(s.ac_input_voltage)} V`);
   // Time-remaining lives on the battery itself; repeating it here would make
